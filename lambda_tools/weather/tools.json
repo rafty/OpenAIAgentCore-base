@@ -1,0 +1,30 @@
+[
+  {
+    "name": "get_weather",
+    "description": "Return mock weather data for a location. This quick-start tool does not call a real weather service.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "string",
+          "description": "City or place name, for example Tokyo or Seattle."
+        }
+      },
+      "required": ["location"]
+    }
+  },
+  {
+    "name": "get_time",
+    "description": "Return mock local time for a timezone. This quick-start tool does not call a real time service.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "timezone": {
+          "type": "string",
+          "description": "Timezone or city name, for example Asia/Tokyo or New York."
+        }
+      },
+      "required": ["timezone"]
+    }
+  }
+]

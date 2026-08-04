@@ -28,7 +28,7 @@
 python3 --version
 uv --version
 node --version
-cdk --version
+CDK --version
 aws --version
 ```
 
@@ -94,7 +94,7 @@ uv run pytest
 次のコマンドを実行します。
 
 ```bash
-cdk synth
+CDK synth
 ```
 
 AWS CDK Toolkitは`cdk.json`を読み込み、内部で次のコマンドを実行してCDKアプリケーションを起動します。
@@ -114,19 +114,19 @@ uv run python app.py
 AWSアカウントおよびリージョンへ初めてデプロイする前に、CDKのブートストラップを実行してください。
 
 ```bash
-cdk bootstrap
+CDK bootstrap
 ```
 
 AWSアカウントIDとリージョンを明示的に指定する場合は、次のように実行します。
 
 ```bash
-cdk bootstrap aws://<AWSアカウントID>/<AWSリージョン>
+CDK bootstrap aws://<AWSアカウントID>/<AWSリージョン>
 ```
 
 例：
 
 ```bash
-cdk bootstrap aws://123456789012/ap-northeast-1
+CDK bootstrap aws://123456789012/ap-northeast-1
 ```
 
 ## 主なコマンド
@@ -171,7 +171,7 @@ cdk bootstrap aws://123456789012/ap-northeast-1
 ```bash
 uv sync
 uv run pytest
-cdk synth
-cdk diff
-cdk deploy
+CDK synth
+CDK diff
+CDK deploy
 ```
