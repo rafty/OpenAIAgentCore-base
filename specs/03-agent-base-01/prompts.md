@@ -8,4 +8,5 @@ OpenAI Agent SDKで作成したAgentをAmazon Bedrock AgentCoreにAWS CDKでデ�
 この会話の中で、要件が決まり次第、`create-sdd-spec`のskillを使ってspecs.mdに記載します。
 
 # for specs.md
+spec-draft.mdが完了したので、skillのcreate-sdd-specを使って、specs/03-agent-base-01/specs.mdを作成してください。
 
