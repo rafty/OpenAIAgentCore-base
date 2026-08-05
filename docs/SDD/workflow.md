@@ -97,7 +97,7 @@ specs/001-example-feature/
 
 会話で要件を整理している場合は、合意した内容と未確定事項を `spec-draft.md` に反映してから、仕様書作成へ進みます。
 
-## 5. Step 3: spec.mdを作成する
+## 5. Step 3: specs.mdを作成する
 
 ### 5.1 create-sdd-specを使用する
 
@@ -105,7 +105,7 @@ specs/001-example-feature/
 
 ```text
 create-sdd-spec Skillを使用し、
-feature directory `specs/001-example-feature` の `spec.md` を作成してください。
+feature directory `specs/001-example-feature` の `specs.md` を作成してください。
 実装、plan.md、tasks.md、ADRの作成は行わないでください。
 ```
 
@@ -119,7 +119,7 @@ feature directory `specs/001-example-feature` の `spec.md` を作成してく�
 - 制約、依存関係
 - 未確定事項、要確認事項
 
-### 5.2 spec.mdをレビューする
+### 5.2 specs.mdをレビューする
 
 次の段階へ進む前に、最低限次を確認します。
 
@@ -130,7 +130,7 @@ feature directory `specs/001-example-feature` の `spec.md` を作成してく�
 - 実装方法が仕様に混入していないか
 - 未確定事項が確定事項として書かれていないか
 
-レビューで要件が変わった場合は、`spec-draft.md` と `spec.md` を更新します。仕様が合意される前に `plan.md` や実装へ進みません。
+レビューで要件が変わった場合は、`spec-draft.md` と `specs.md` を更新します。仕様が合意される前に `plan.md` や実装へ進みません。
 
 ## 6. Step 4: plan.mdを作成する
 
@@ -144,7 +144,7 @@ feature directory `specs/001-example-feature` の `plan.md` を作成してく�
 既存コード、設定、テスト、関連文書を確認し、実装は行わないでください。
 ```
 
-`plan.md` では、`spec.md` の要求を変更せず、次を整理します。
+`plan.md` では、`specs.md` の要求を変更せず、次を整理します。
 
 - 実装全体の方針
 - 変更対象と変更しないもの
@@ -160,7 +160,7 @@ feature directory `specs/001-example-feature` の `plan.md` を作成してく�
 
 次を確認します。
 
-- `spec.md` の要求を追加・変更していないか
+- `specs.md` の要求を追加・変更していないか
 - 変更対象と変更しないものが区別されているか
 - 既存の実装パターンを確認しているか
 - 新しい技術や依存関係を導入する理由があるか
@@ -228,7 +228,7 @@ feature directory `specs/001-example-feature` の `tasks.md` を作成してく�
 - 完了を客観的に確認できる
 - 対象が分かる
 - 依存タスクが分かる
-- `spec.md` または `plan.md` に根拠がある
+- `specs.md` または `plan.md` に根拠がある
 
 並列に実施できるタスクには `[P]` を付けます。
 
@@ -337,7 +337,7 @@ git commit -m "<commit message>"
 
 ブランチをpushする前に、次を確認します。
 
-- `spec.md` の受け入れ条件を満たしている
+- `specs.md` の受け入れ条件を満たしている
 - `plan.md` の実装方針と変更対象に沿っている
 - `tasks.md` の必要なタスクが完了している
 - 対象外の変更が混ざっていない
@@ -466,13 +466,13 @@ git pull --ff-only origin main
 
 変更内容に応じて、上流成果物から修正します。
 
-| 変更内容 | 最初に見直す成果物 | その後に確認する成果物 |
-|---|---|---|
-| 目的、スコープ、要件、受け入れ条件が変わる | `spec-draft.md` / `spec.md` | `plan.md`、`tasks.md`、必要なADR |
-| 実装方式、変更対象、検証方針が変わる | `plan.md` | `tasks.md`、必要なADR |
-| 作業順、担当可能な単位、依存関係だけが変わる | `tasks.md` | 実装状況 |
-| 設計判断や判断理由が変わる | ADR | `spec.md`、`plan.md`、`tasks.md` への影響 |
-| ステージ済み差分の目的が混在する | ステージ内容 | コミットの分割 |
-| ブランチに独立した複数要件が混在する | 要件分割 | feature directory、ブランチ、Pull Request |
+| 変更内容 | 最初に見直す成果物                    | その後に確認する成果物                          |
+|---|------------------------------|--------------------------------------|
+| 目的、スコープ、要件、受け入れ条件が変わる | `spec-draft.md` / `specs.md` | `plan.md`、`tasks.md`、必要なADR          |
+| 実装方式、変更対象、検証方針が変わる | `plan.md`                    | `tasks.md`、必要なADR                    |
+| 作業順、担当可能な単位、依存関係だけが変わる | `tasks.md`                   | 実装状況                                 |
+| 設計判断や判断理由が変わる | ADR                          | `specs.md`、`plan.md`、`tasks.md` への影響 |
+| ステージ済み差分の目的が混在する | ステージ内容                       | コミットの分割                              |
+| ブランチに独立した複数要件が混在する | 要件分割                         | feature directory、ブランチ、Pull Request  |
 
 下流の成果物だけを修正し、上流の成果物との矛盾を残さないでください。

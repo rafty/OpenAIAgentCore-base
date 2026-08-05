@@ -1,7 +1,7 @@
 ---
 name: create-sdd-spec
 description: >
-  SDDのfeature仕様書spec.mdを作成する。
+  SDDのfeature仕様書specs.mdを作成する。
   spec-draft.mdから機能要件、非機能要件、受け入れ条件、
   制約、依存関係、未確定事項を整理するときに使用する。
   実装、plan.md、tasks.mdの作成には使用しない。
@@ -12,7 +12,7 @@ description: >
 ## 目的
 
 `spec-draft.md` をもとに、実装前のfeature仕様書
-`spec.md`を作成する。
+`specs.md`を作成する。
 
 ## 入力
 
@@ -33,7 +33,7 @@ specs/001-requirement
 出力ファイル:
 
 ```text
-<feature-directory>/spec.md
+<feature-directory>/specs.md
 ```
 
 ## 最初に確認すること
@@ -59,7 +59,7 @@ specs/001-requirement
 5. 受け入れ条件を検証可能な形式で定義する。
 6. 関連コードと既存構成との依存関係を確認する。
 7. 単一領域の変更か複数領域の変更かを明記する。
-8. `assets/spec-template.md` の形式に従って `spec.md` を作成する。
+8. `assets/spec-template.md` の形式に従って `specs.md` を作成する。
 9. 作成後に内容を自己レビューする。
 
 ## 作業ルール

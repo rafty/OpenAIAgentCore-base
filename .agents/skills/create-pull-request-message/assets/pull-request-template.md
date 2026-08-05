@@ -31,7 +31,7 @@
 
 ## SDD成果物
 
-- `{{FEATURE_DIR}}/spec.md`
+- `{{FEATURE_DIR}}/specs.md`
 - `{{FEATURE_DIR}}/plan.md`
 - `{{FEATURE_DIR}}/tasks.md`
 - {{RELATED_ADR_OR_DOCUMENT}}
