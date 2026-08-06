@@ -1,0 +1,19 @@
+.git
+.gitignore
+.DS_Store
+.env
+.env.*
+.pytest_cache
+.ruff_cache
+.venv
+__pycache__
+*.pem
+*.key
+*.py[cod]
+# package配下に生成されたPython cacheもbuild contextから再帰的に除外する。
+**/__pycache__
+**/*.py[cod]
+cdk.out
+pyproject.toml
+tests
+uv.lock

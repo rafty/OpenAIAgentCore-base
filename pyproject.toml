@@ -9,5 +9,11 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "bedrock-agentcore==1.20.0",
+    "openai-agents==0.19.4",
+    "openai[bedrock]==2.53.0",
     "pytest==8.4.2",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["agents/src"]

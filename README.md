@@ -19,3 +19,16 @@ SDDの基本方針、具体的な実施手順、共同開発のルールは、�
 このプロジェクトでは、CDKアプリケーションを`uv`経由で実行するように設定しています。
 
 [docs/CDK/README.md](docs/CDK/README.md)
+
+## AgentCore Runtime Agent
+
+OpenAI Agents SDKのマルチエージェント、入力/SSE契約、AgentCore Memory Session、コンテナ、デプロイ手順は[Agentドキュメント](docs/Agent/README.md)を参照してください。
+
+主要なローカル検証コマンドは次のとおりです。
+
+```bash
+uv lock --check
+uv run pytest
+uv run python app.py
+docker build --platform linux/arm64 -t openai-agentcore-poc:local agents
+```
