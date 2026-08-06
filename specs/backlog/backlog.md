@@ -12,6 +12,15 @@
 
 ---
 
+# Amazon Bedrock Managed Knowledge Base
+
+- Bedrock Managed Knowledge BaseをRAGサービスとして利用する。
+- S3にドキュメントを配置する
+- S3のネイティブコネクターを使用する
+
+
+---
+
 # Amazon Bedrock AgentCore のオブザーバビリティ
 
 - 2026.08.05
