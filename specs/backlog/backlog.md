@@ -10,14 +10,6 @@
 - Bedrock上のAgentのデバッグができるようにログなどを整備する。
 - Amazon Bedrock AgentCore のオブザーバビリティが適切ならそれを対応する。
 
-
-# マルチエージェントのスペシャリストエージェントのTool実装
-
-- 2026.08.05
-- 作成者: rafty
-- 天気予報エージェントのToolは、`lambda_tools/weather`にコードがあります。
-- ツールスキーマは`lambda_tools/weather/tools.json`にあります。
-
 ---
 
 # Amazon Bedrock AgentCore のオブザーバビリティ
