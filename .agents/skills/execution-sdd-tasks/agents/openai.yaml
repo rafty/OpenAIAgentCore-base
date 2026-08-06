@@ -1,0 +1,4 @@
+interface:
+  display_name: "Execution SDD Tasks"
+  short_description: "未完了のSDDタスクを順番に実装・検証して進捗を更新"
+  default_prompt: "Use $execution-sdd-tasks to execute and complete unfinished tasks in the specified feature directory."
