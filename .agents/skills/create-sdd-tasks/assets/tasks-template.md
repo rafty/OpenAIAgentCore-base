@@ -32,6 +32,9 @@ plan.mdの変更対象を、コンポーネント、リソース、Agent、モ�
 対象、実施内容、完了条件、依存関係が分かるように記載する。
 タスクが大きすぎる場合は、作成、設定、連携、例外処理などの作業単位に分割する。
 単独では成果を確認できない細かな編集は、同じ目的のタスクへまとめる。
+コードを変更する各タスクには、設計意図、選択理由、非自明な処理、条件分岐、または例外処理を
+理解できる日本語コメントを追加する。コードの自明な読み替えではなく、コードだけでは分かりにくい
+理由や判断を説明する。
 -->
 
 ### {{IMPLEMENTATION_UNIT_1}}
@@ -39,13 +42,15 @@ plan.mdの変更対象を、コンポーネント、リソース、Agent、モ�
 - [ ] T010 {{TASK_TITLE}}
   - 対象: `{{TARGET_FILE_MODULE_RESOURCE_OR_COMPONENT}}`
   - 実施内容: {{IMPLEMENTATION_DETAIL}}
-  - 完了条件: {{DONE_CRITERIA}}
+  - コメント（コードを変更する場合）: 設計意図、選択理由、または非自明な処理を理解できる日本語コメントを該当箇所に追加する
+  - 完了条件: {{DONE_CRITERIA}}。コードを変更する場合は、日本語コメントがコードを読む人の理解を補い、コードの自明な読み替えになっていない
   - 依存: {{DEPENDENCY_TASK_ID_OR_NONE}}
 
 - [ ] T011 [P] {{PARALLEL_TASK_TITLE}}
   - 対象: `{{TARGET_FILE_MODULE_RESOURCE_OR_COMPONENT}}`
   - 実施内容: {{IMPLEMENTATION_DETAIL}}
-  - 完了条件: {{DONE_CRITERIA}}
+  - コメント（コードを変更する場合）: 設計意図、選択理由、または非自明な処理を理解できる日本語コメントを該当箇所に追加する
+  - 完了条件: {{DONE_CRITERIA}}。コードを変更する場合は、日本語コメントがコードを読む人の理解を補い、コードの自明な読み替えになっていない
   - 依存: {{DEPENDENCY_TASK_ID_OR_NONE}}
 
 ### {{IMPLEMENTATION_UNIT_2}}
@@ -53,7 +58,8 @@ plan.mdの変更対象を、コンポーネント、リソース、Agent、モ�
 - [ ] T020 {{TASK_TITLE}}
   - 対象: `{{TARGET_FILE_MODULE_RESOURCE_OR_COMPONENT}}`
   - 実施内容: {{IMPLEMENTATION_DETAIL}}
-  - 完了条件: {{DONE_CRITERIA}}
+  - コメント（コードを変更する場合）: 設計意図、選択理由、または非自明な処理を理解できる日本語コメントを該当箇所に追加する
+  - 完了条件: {{DONE_CRITERIA}}。コードを変更する場合は、日本語コメントがコードを読む人の理解を補い、コードの自明な読み替えになっていない
   - 依存: {{DEPENDENCY_TASK_ID_OR_NONE}}
 
 <!--
