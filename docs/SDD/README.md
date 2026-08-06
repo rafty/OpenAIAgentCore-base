@@ -89,7 +89,8 @@ flowchart TD
     I --> J[plan.mdをレビュー]
     J --> K[create-sdd-tasks]
     K --> L[tasks.mdをレビュー]
-    L --> M[実装・テスト・文書更新]
+    L --> M0[execution-sdd-tasks]
+    M0 --> M[実装・テスト・文書更新]
     M --> N[変更をステージ]
     N --> O[create-commit-message]
     O --> P[コミット]
@@ -144,6 +145,9 @@ project-root/
 │       ├── create-sdd-tasks/
 │       │   ├── SKILL.md
 │       │   └── assets/tasks-template.md
+│       ├── execution-sdd-tasks/
+│       │   ├── SKILL.md
+│       │   └── agents/openai.yaml
 │       ├── create-adr/
 │       │   ├── SKILL.md
 │       │   └── assets/adr-template.md
@@ -181,8 +185,10 @@ flowchart LR
     D[既存コード・設定・文書・Git差分] --> E
     E --> F[specs.md / plan.md / tasks.md / ADR]
     E --> G[コミットメッセージ / PRメッセージ]
+    E --> I[実装 / テスト / 文書 / tasks.mdの進捗]
     F --> H[人によるレビューと合意]
     G --> H
+    I --> H
 ```
 
 - `AGENTS.md` には、プロジェクト全体または対象領域で常に守るルールを記載します。
@@ -197,6 +203,7 @@ flowchart LR
 | `create-sdd-spec` | `spec-draft.md`、既存コード・文書             | `specs.md` | 要件整理後 |
 | `create-sdd-plan` | `specs.md`、既存コード・文書                  | `plan.md`  | 仕様レビュー後 |
 | `create-sdd-tasks` | `specs.md`、`plan.md`                 | `tasks.md` | 計画レビュー後 |
+| `execution-sdd-tasks` | レビュー済みの`tasks.md`、`specs.md`、`plan.md`、ADR、既存実装 | 実装・テスト・文書、進捗更新済みの`tasks.md` | タスクレビュー後、実装開始・再開時 |
 | `create-sdd-adr` | 会話で合意した設計判断、明示的に参照された情報              | ADR        | 設計判断が確定した時点 |
 | `create-commit-message` | `git diff --cached` のステージ済み差分        | コミットメッセージ  | コミット直前 |
 | `create-pull-request-message` | `main` と要件ブランチの差分全体、コミット履歴、確認済みの検証結果 | PRタイトル・本文  | push後、PR作成前 |
@@ -224,7 +231,7 @@ flowchart LR
 7. `create-sdd-plan` を使って `plan.md` を作成し、チームでレビューする
 8. 必要な設計判断を `create-sdd-adr` でADRに記録する
 9. `create-sdd-tasks` を使って `tasks.md` を作成し、チームでレビューする
-10. `tasks.md` に従って実装、テスト、文書更新を行う
+10. `execution-sdd-tasks` を使い、`tasks.md` の未完了タスクを上から順番に実装、テスト、文書更新する
 11. 意味のある変更単位をステージし、`create-commit-message` でコミットメッセージを作成する
 12. 差分とメッセージを確認してコミットする。必要な回数だけ繰り返す
 13. 受け入れ条件と完了条件を確認し、要件ブランチをGitHubへpushする
@@ -246,6 +253,8 @@ flowchart LR
 - AIが既存コードや既存文書を確認せずに提案している場合は、そのまま採用しないでください。
 - 未確定事項をAIに推測させず、文書に未確定事項として残してください。
 - 会話中に重要な設計判断が確定した場合は、会話が失われる前にADRとして記録してください。
+- `execution-sdd-tasks` で実装する場合は、タスク完了直後に `[x]` を付け、完了できないタスクには `- 未実施理由:` を記録してください。
+- 中断後に再開する場合は、完了済みの `[x]` を保持し、上から最初の `[ ]` タスクから実行してください。
 - コミットメッセージは、必ずステージ済み差分と一致することを人が確認してください。
 - Pull Request本文は、ブランチ全体の差分と実際の検証結果に一致することを人が確認してください。
 - 明示的に依頼しない限り、AIに `git add`、`git commit`、`git push`、Pull Request作成、マージを実行させません。
