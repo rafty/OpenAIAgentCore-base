@@ -15,3 +15,17 @@ specs.mdが完成したので、skillのcreate-sdd-planを使って、specs/03-a
 
 # for tasks.md
 plan.mdが完成したので、skillのcreate-sdd-tasksを使って、specs/03-agent-base-01/tasks.mdを作成してください。
+
+# for executing tasks
+tasks.mdが完成したので、specs/03-agent-base-01/tasks.mdのタスクを実行し、完了してください。
+specs/03-agent-base-01/specs.md、 specs/03-agent-base-01/plan.md、 `docs/ADR/`のADR を参照し、 すべてのコンテキストを考慮してタスクリスト内のタスクを実装してください。 
+タスクを順番に完了することに集中してください。 
+タスクが完了したら、[x] を使用して完了マークを付けてください。 
+各ステップが完了したら、タスクリストのマークとタスクの完了マーク [x] を更新することが非常に重要です。
+実行が不可能なタスクの場合は、タスクの最後の行に`- 未実施理由:`を追加し、未実施の理由を記載してください。
+
+あなたは、AI AgentやAWSの超優秀なエンジニアです。プロフェッショナルな視点で実装してください。
+
+## ２度目以降のtasks.mdの実行
+２度目以降のtasks.mdのタスク実行の場合は、完了マークがついてないタスクがあります。その場合は、続けてタスク実行を実施してください。
+

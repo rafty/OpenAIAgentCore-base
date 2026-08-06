@@ -6,9 +6,9 @@
 - Reviewers: なし
 - Supersedes: なし
 - Superseded by: なし
-- Related specs: `specs/03-agent-base-01/spec-draft.md`
-- Related plan: 未作成
-- Related tasks: 未作成
+- Related specs: `specs/03-agent-base-01/specs.md`
+- Related plan: `specs/03-agent-base-01/plan.md`
+- Related tasks: `specs/03-agent-base-01/tasks.md`
 
 ## 1. 背景
 
@@ -140,4 +140,3 @@ flowchart LR
 - [OpenAI Python: Amazon Bedrock](https://github.com/openai/openai-python#amazon-bedrock)
 - [OpenAI Agents SDK: Models](https://openai.github.io/openai-agents-python/models/)
 - [AmazonBedrockMantleInferenceAccess](https://docs.aws.amazon.com/aws-managed-policy/latest/reference/AmazonBedrockMantleInferenceAccess.html)
-

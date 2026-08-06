@@ -1,5 +1,37 @@
+# コードの日本語コメント
+
+- コードを実装、または、変更する際など、コードを読む人が理解しやすいように日本語でコメントを入れる
+- skillの`create-sdd-tasks`に日本語コメントをいれるように、skillを更新する。
+
+
+# タスク実行の Skill 作成
+
+- 発生日: 2026.08.06
+- 作成者: rafty
+- タスク実行の Skill `.agents/skills/execution-sdd-tasks`に作成する。
+- タスク実行の継続についても、同じskillにいれること。
+- 実行が不可能なタスクの場合は、タスクの行の後ろに理由([理由]・・・)を記載する。
+- タスク実行が完了し、次回以降に実施すべきタスクがあれば、tasks.mdの最後に`## 次回以降に実施すべきタスク`に記載する。
+- docs/SDD/のドキュメントを更新する。
+
+
+# AgentCoreのローカルデバッグの検討
+
+- 2026.08.06
+- 作成者: rafty
+- ビルドしたAgentのコンテナをAWSにデプロイしてデバッグする前に、ローカル環境でAgentをデバッグする検討をする。
+- AgentのToolにおけるDBなどはAWSリソースを使い、AgentのPythonコードをローカルデバッグする方法を検討する。
+
+# Agent実行のデバッグ
+
+- Bedrock上のAgentのデバッグができるようにログなどを整備する。
+- Amazon Bedrock AgentCore のオブザーバビリティが適切ならそれを対応する。
+
+
 # マルチエージェントのスペシャリストエージェントのTool実装
 
+- 2026.08.05
+- 作成者: rafty
 - 天気予報エージェントのToolは、`lambda_tools/weather`にコードがあります。
 - ツールスキーマは`lambda_tools/weather/tools.json`にあります。
 
@@ -7,6 +39,8 @@
 
 # Amazon Bedrock AgentCore のオブザーバビリティ
 
+- 2026.08.05
+- 作成者: rafty
 CloudWatch Logsへの独自出力だけで完結させず、Amazon Bedrock AgentCore Observabilityを利用する予定。
 
 ## 質問
@@ -16,6 +50,8 @@ CloudWatch Logsへの独自出力だけで完結させず、Amazon Bedrock Agent
 
 # AgentCore RuntimeのMMDSv2確認と条件付き対応
 
+- 2026.08.05
+- 作成者: rafty
 - AgentCore Runtimeのデプロイ後に`GetAgentRuntime`を実行し、`metadataConfiguration.requireMMDSV2`が`true`であることを確認する。
 - `requireMMDSV2`が`true`の場合は、追加対応を行わない。
 - `requireMMDSV2`が未設定、`null`、または`false`の場合は、まず利用中のCloudFormationおよびAWS CDKが作成時の明示指定に対応していないか再確認する。
@@ -26,6 +62,9 @@ CloudWatch Logsへの独自出力だけで完結させず、Amazon Bedrock Agent
 ---
 
 # 本番運用対応
+
+- 2026.08.05
+- 作成者: codex
 
 本要件のPoCでは簡易な構成を許容するため、正式なサービスとして本番運用する前に、少なくとも次を要件化して対応する。
 
