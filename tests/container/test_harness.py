@@ -33,10 +33,14 @@ def test_container_harness_uses_production_http_contract(monkeypatch) -> None:
     assert ping.status_code == 200
     assert ping.json()["status"] in {"Healthy", "HealthyBusy"}
     assert invalid.status_code == 400
-    assert _events(success) == [
+    assert success.status_code == 200
+    events = _events(success)
+    assert events == [
         {"type": "text_delta", "delta": "container"},
         {"type": "completed"},
     ]
+    assert sum(event["type"] == "completed" for event in events) == 1
+    assert all(event["type"] != "error" for event in events)
 
 
 def test_container_harness_error_sse(monkeypatch) -> None:
@@ -47,5 +51,11 @@ def test_container_harness_error_sse(monkeypatch) -> None:
             json={"prompt": "x", "actor_id": "actor"},
             headers={SESSION_HEADER: "session"},
         )
-    assert _events(response)[-1]["type"] == "error"
-    assert all(event["type"] != "completed" for event in _events(response))
+    assert response.status_code == 200
+    events = _events(response)
+    assert events == [
+        {"type": "text_delta", "delta": "container"},
+        {"type": "error", "message": "処理中にエラーが発生しました。"},
+    ]
+    assert sum(event["type"] == "error" for event in events) == 1
+    assert all(event["type"] != "completed" for event in events)

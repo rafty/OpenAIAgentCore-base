@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
-from agents import Agent, Model
+from agents import Model
 from bedrock_agentcore import BedrockAgentCoreApp, RequestContext
 from starlette.responses import Response
 
@@ -21,7 +21,12 @@ from agent_app.contracts import (
     validate_session_id,
 )
 from agent_app.models import create_bedrock_responses_model
-from agent_app.service import stream_agent_response
+from agent_app.gateway_tools import create_gateway_mcp_server
+from agent_app.service import (
+    AgentFactory,
+    MCPServerFactory,
+    stream_agent_response,
+)
 from agent_app.session import (
     AgentCoreMemorySession,
     MemoryClientFactory,
@@ -31,7 +36,6 @@ from agent_app.session import (
 
 ConfigLoader = Callable[[], AppConfig]
 ModelFactory = Callable[[AppConfig], Model]
-AgentFactory = Callable[[Model], Any]
 SessionFactory = Callable[[AppConfig, InvocationInput], AgentCoreMemorySession]
 StreamService = Callable[..., AsyncIterator[StreamEvent]]
 
@@ -41,18 +45,18 @@ def create_runtime_app(
     config: AppConfig | None = None,
     config_loader: ConfigLoader = AppConfig.from_env,
     model: Model | None = None,
-    manager_agent: Agent | None = None,
     model_factory: ModelFactory = create_bedrock_responses_model,
     agent_factory: AgentFactory = create_agents,
+    mcp_server_factory: MCPServerFactory = create_gateway_mcp_server,
     session_factory: SessionFactory | None = None,
     memory_client_factory: MemoryClientFactory = create_memory_data_client,
     stream_service: StreamService = stream_agent_response,
 ) -> BedrockAgentCoreApp:
-    """本番境界を維持したままModelとMemoryをテストダブルへ差し替える。"""
+    """HTTP境界を維持したままModel、MCP、Memoryを差し替え可能にする。"""
 
     app = BedrockAgentCoreApp()
     resolved_config = config
-    resolved_manager = manager_agent
+    resolved_model = model
 
     def resolve_config() -> AppConfig:
         """有効なHTTP入力が来るまで環境設定の評価を遅延する。"""
@@ -62,14 +66,13 @@ def create_runtime_app(
             resolved_config = config_loader()
         return resolved_config
 
-    def resolve_manager(active_config: AppConfig) -> Agent:
-        """本番modelとAgentを初回の有効な呼び出し時に一度だけ生成する。"""
+    def resolve_model(active_config: AppConfig) -> Model:
+        """本番modelだけを初回の有効な呼び出し時に一度生成して再利用する。"""
 
-        nonlocal resolved_manager
-        if resolved_manager is None:
-            active_model = model if model is not None else model_factory(active_config)
-            resolved_manager = agent_factory(active_model).manager
-        return resolved_manager
+        nonlocal resolved_model
+        if resolved_model is None:
+            resolved_model = model_factory(active_config)
+        return resolved_model
 
     def default_session_factory(
         active_config: AppConfig,
@@ -104,16 +107,20 @@ def create_runtime_app(
                 actor_id=validated_payload.actor_id,
                 session_id=session_id,
             )
-            active_manager = resolve_manager(active_config)
+            active_model = resolve_model(active_config)
             session = build_session(active_config, invocation)
         except Exception:
             return server_error_response()
 
-        # ここで初めてasync iteratorを返すため、以降の失敗はSSE errorとして扱われる。
+        # modelだけをprocess単位で共有し、MCP serverとAgentはiterator内部で毎回生成する。
+        # factory注入により、実AWSへ接続せず同じ本番境界を決定的に検証できる。
         return stream_service(
-            manager_agent=active_manager,
+            config=active_config,
+            model=active_model,
             prompt=invocation.prompt,
             session=session,
+            mcp_server_factory=mcp_server_factory,
+            agent_factory=agent_factory,
         )
 
     return app

@@ -22,3 +22,8 @@ specs.mdはcreate-sdd-specのskillに従って、作成されましたか？
 
 plan.mdを承認しました。
 skillのcreate-sdd-tasksを使用して、tasks.mdを作成してください。
+
+# Executing tasks.md
+
+skillのexecution-sdd-tasks を使い、`specs/05-agent-tool-weather-01/tasks.md ` の未完了タスクを上から順番に実装、テスト、文書更新してください。
+

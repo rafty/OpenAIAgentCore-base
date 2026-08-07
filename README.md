@@ -20,9 +20,14 @@ SDDの基本方針、具体的な実施手順、共同開発のルールは、�
 
 [docs/CDK/README.md](docs/CDK/README.md)
 
-## AgentCore Runtime Agent
+## AgentCore Runtime PoC
 
-OpenAI Agents SDKのマルチエージェント、入力/SSE契約、AgentCore Memory Session、コンテナ、デプロイ手順は[Agentドキュメント](docs/Agent/README.md)を参照してください。
+このPoCは、OpenAI Agents SDKのマネージャーAgentとWeather AgentをAmazon Bedrock AgentCore Runtimeで実行します。マネージャーAgentが会話と最終回答を所有し、Weather Agentだけが専用のAgentCore GatewayへSigV4で接続して、Lambdaターゲットの`get_weather`と`get_time`を利用します。
+
+Weather／Time Toolは接続確認用の固定モックだけを返し、現在の実天気や実時刻を取得しません。GatewayまたはToolを利用できない場合も、両Agentは値を推測せず取得不能を案内します。
+
+- Agent構成、MCP接続、HTTP／SSE／Memory契約、コンテナおよびRuntime検証: [Agentドキュメント](docs/Agent/README.md)
+- Gateway、GatewayTarget、Lambda、IAM境界およびCDK検証: [CDKドキュメント](docs/CDK/README.md)
 
 主要なローカル検証コマンドは次のとおりです。
 

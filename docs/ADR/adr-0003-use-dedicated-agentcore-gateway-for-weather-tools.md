@@ -7,7 +7,7 @@
 - Supersedes: N/A
 - Superseded by: N/A
 - Related specs: `specs/05-agent-tool-weather-01/specs.md`
-- Related plan: N/A
+- Related plan: `specs/05-agent-tool-weather-01/plan.md`
 - Related tasks: N/A
 
 ## 1. 背景

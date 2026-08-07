@@ -128,8 +128,8 @@ Gateway URLには`gateway.gateway_url`のCloudFormation参照を使用する。G
 
 - `agentcore.Gateway`を`GatewayAuthorizer.using_aws_iam()`と`role=gateway_execution_role`で作成し、条件付き信頼ポリシーと限定権限を持つ専用Gateway実行ロールを明示的に関連付ける。MCP protocolの`supported_versions`は`MCPProtocolVersion.of("2025-11-25")`と`MCPProtocolVersion.MCP_2025_03_26`の2つを明示する。
 - `search_type`とGateway instructionsは追加せず、Gatewayの例外レベルも省略してサニタイズされた既定動作を使用する。`DEBUG`は設定しない。
-- Gateway実行ロールの信頼ポリシーは、Principalを`bedrock-agentcore.amazonaws.com`、`aws:SourceAccount`を現在のstack account、`aws:SourceArn`を現在のpartition・region・accountにある`gateway/OpenAiWeatherGateway-*`へ限定する。
-- Gateway自身がGateway実行ロールを参照するため、信頼ポリシーから`gateway.gateway_arn`を直接参照しない。固定Gateway名からARN patternを組み立て、CloudFormationの循環依存を避けながら対象Gateway名へ限定する。
+- Gateway実行ロールの信頼ポリシーは、Principalを`bedrock-agentcore.amazonaws.com`、`aws:SourceAccount`を現在のstack account、`aws:SourceArn`を現在のpartition・region・accountにある`gateway/openaiweathergateway-*`へ限定する。Gateway表示名は`OpenAiWeatherGateway`のまま維持し、AgentCoreが生成するgateway ID／ARNの小文字prefixに合わせて、固定名の`lower()`からSource ARN patternを組み立てる。
+- Gateway自身がGateway実行ロールを参照するため、信頼ポリシーから`gateway.gateway_arn`を直接参照しない。固定Gateway名の小文字prefixからARN patternを組み立て、CloudFormationの循環依存を避けながら対象Gateway名へ限定する。
 - GatewayTargetは`GatewayTarget.for_lambda()`で作成し、credential providerへ`GatewayCredentialProvider.from_iam_role()`を明示して`GATEWAY_IAM_ROLE`を固定する。
 - Gateway実行ロールへの`lambda:InvokeFunction`は対象Lambda ARNとそのversion／aliasだけへ限定する。grantをGatewayTargetより前に適用して、Target作成時に権限が存在する依存関係をCloudFormationへ反映する。
 - RuntimeロールへのGateway関連権限は`gateway.grant_invoke(runtime.role)`を使用し、対象Gateway ARNへの`bedrock-agentcore:InvokeGateway`だけを追加する。既存のモデル管理ポリシーとMemory grantは維持する。
@@ -267,7 +267,7 @@ API key、Bearer token、静的AWSアクセスキー、Secret keyおよびSessio
 | --- | --- | --- |
 | 固定CDK版に`2025-11-25`の名前付き定数がない | Gatewayが旧versionだけを公開し、MCP initializeが失敗する | `MCPProtocolVersion.of("2025-11-25")`を使用し、synthした`SupportedVersions`と条件付きAWS E2Eの応答versionを確認する |
 | `tools.json`のdictをL2へ直接渡せない、または変換がスキーマから乖離する | synth失敗、Tool名・入力契約の不一致 | JSONからL2型への限定的な変換helperを作り、未知shapeはfail-fastとする。元JSON、inline payload、handler分岐を同じテストで照合する |
-| Gateway ARNをGateway Roleのtrustへ直接参照して循環する | CloudFormation synthまたはdeploy失敗 | 固定Gateway名とstack情報から`gateway/OpenAiWeatherGateway-*`を組み立て、Gateway resourceへのRefを作らない。templateの依存関係を検査する |
+| Gateway ARNをGateway Roleのtrustへ直接参照して循環する、または表示名の大文字を実gateway IDへ適用してtrust条件が不一致になる | CloudFormation synthまたはdeploy失敗 | 固定Gateway名の小文字prefixとstack情報から`gateway/openaiweathergateway-*`を組み立て、Gateway resourceへのRefを作らない。templateの依存関係を検査する |
 | Target作成時にGateway RoleのLambda権限がまだ反映されていない | GatewayTarget作成または初回同期に失敗する | 対象LambdaへのGrantをTargetより前に適用し、Targetの`DependsOn`をtemplateで確認する |
 | IAM grantが対象外リソースや追加actionへ広がる | Runtime、GatewayまたはLambdaの過剰権限 | action、resource、trust条件、S3／Secrets権限なしをCloudFormation assertionで固定する |
 | 新規MCP／SigV4依存と既存SDKの解決不整合 | import、コンテナbuildまたはRuntime起動失敗 | 完全一致versionを両manifestへ追加し、`uv` lock、import test、Python 3.12 test、Linux ARM64 Docker buildを早期に行う |
