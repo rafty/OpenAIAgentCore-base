@@ -4,7 +4,14 @@ from agent_app.config import AppConfig
 from agent_app.models import create_bedrock_client, create_bedrock_responses_model
 
 
-CONFIG = AppConfig("us-east-2", "openai.gpt-5.5", "memory-id", "1")
+CONFIG = AppConfig(
+    "us-east-2",
+    "openai.gpt-5.5",
+    "memory-id",
+    "1",
+    "https://gateway-id.gateway.bedrock-agentcore.us-east-2.amazonaws.com/mcp",
+    "WeatherTimeMock",
+)
 
 
 def test_bedrock_responses_model_uses_sigv4_default_chain(monkeypatch) -> None:

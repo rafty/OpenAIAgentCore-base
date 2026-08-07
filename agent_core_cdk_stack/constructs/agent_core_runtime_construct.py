@@ -17,8 +17,14 @@ class AgentCoreRuntimeConstruct(Construct):
         construct_id: str,
         *,
         memory: agentcore.Memory,
+        gateway: agentcore.IGateway,
+        gateway_target_name: str,
     ) -> None:
         super().__init__(scope, construct_id)
+
+        gateway_url = gateway.gateway_url
+        if not gateway_url:
+            raise ValueError("AgentCore Gateway URLを解決できません。")
 
         # AgentCore Runtimeの実行基盤に合わせ、同じagents/をLinux ARM64としてbuildする。
         agents_directory = Path(__file__).resolve().parents[2] / "agents"
@@ -43,6 +49,10 @@ class AgentCoreRuntimeConstruct(Construct):
                 "BEDROCK_OPENAI_MODEL_ID": "openai.gpt-5.5",
                 "OPENAI_AGENTS_DISABLE_TRACING": "1",
                 "AGENTCORE_MEMORY_ID": memory.memory_id,
+                # Gateway URLはCloudFormation tokenのまま非秘密設定として渡し、
+                # 生成IDやaccountをAgentコードへ固定しない。
+                "AGENTCORE_GATEWAY_URL": gateway_url,
+                "AGENTCORE_GATEWAY_TARGET_NAME": gateway_target_name,
             },
         )
 
@@ -54,3 +64,5 @@ class AgentCoreRuntimeConstruct(Construct):
         )
         memory.grant_read_short_term_memory(self.runtime.role)
         memory.grant_write(self.runtime.role)
+        # Runtimeには専用Gatewayの呼び出しだけを追加し、Target／Lambda権限は渡さない。
+        gateway.grant_invoke(self.runtime.role)

@@ -12,6 +12,8 @@ EXPECTED = {
     "openai-agents": "0.19.4",
     "openai": "2.53.0",
     "bedrock-agentcore": "1.20.0",
+    "mcp-proxy-for-aws": "1.6.4",
+    "mcp": "1.29.0",
 }
 
 
@@ -45,11 +47,20 @@ def test_required_public_interfaces_can_be_imported() -> None:
         "openai": ["AsyncOpenAI"],
         "openai.providers": ["bedrock"],
         "agents": ["Agent", "Runner", "SessionABC"],
+        "agents.mcp": ["MCPServerStreamableHttp"],
         "agents.models.openai_responses": ["OpenAIResponsesModel"],
         "bedrock_agentcore": ["BedrockAgentCoreApp"],
         "bedrock_agentcore.memory": ["MemoryClient"],
+        "mcp_proxy_for_aws.client": ["aws_iam_streamablehttp_client"],
     }
     for module_name, names in imports.items():
         module = importlib.import_module(module_name)
         for name in names:
             assert getattr(module, name) is not None
+
+
+def test_mcp_latest_protocol_version_matches_gateway_contract() -> None:
+    mcp_types = importlib.import_module("mcp.types")
+
+    # 依存更新でクライアントの提示versionだけが暗黙に変わることを防ぎ、Gatewayとの契約を固定する。
+    assert mcp_types.LATEST_PROTOCOL_VERSION == "2025-11-25"

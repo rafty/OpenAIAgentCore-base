@@ -2,21 +2,27 @@
 
 ## 概要
 
-このディレクトリの実装は、OpenAI Agents SDKのマネージャーAgentとWeather AgentをAmazon Bedrock AgentCore Runtimeで実行するPoC基盤です。マネージャーAgentが会話と最終回答を所有し、Weather AgentをAgent-as-Toolとして利用します。Weather Agentには実天気データを取得するToolがないため、取得不能であることを回答し、天気を推測しません。
+このディレクトリの実装は、OpenAI Agents SDKのマネージャーAgentとWeather AgentをAmazon Bedrock AgentCore Runtimeで実行するPoC基盤です。マネージャーAgentが会話と最終回答を所有し、天気と時刻を担当するWeather AgentをAgent-as-Toolとして利用します。Weather Agentだけが専用のAmazon Bedrock AgentCore GatewayへMCP接続し、Lambdaターゲットの`get_weather`と`get_time`を呼び出します。
+
+両Toolは外部サービスやシステム時計を参照せず、テスト用の固定モック値だけを返します。Weather AgentとマネージャーAgentは、回答が現在の実天気または実時刻ではないことを日本語で明示します。GatewayまたはToolを利用できない場合は、固定値や推測値で代替せず、取得不能であることを回答します。
 
 ```mermaid
 flowchart LR
     Caller["IAM認証された呼び出し元"] -->|"prompt / actor_id / Runtime session ID"| Runtime["AgentCore Runtime / DEFAULT endpoint"]
     Runtime --> App["BedrockAgentCoreApp"]
     App --> Manager["Manager Agent"]
-    Manager -->|"Agent.as_tool()"| Weather["Weather Agent"]
+    Manager -->|"Agent.as_tool()"| Weather["Weather Agent / 天気・時刻"]
     Manager --> Model["Bedrock Mantle / openai.gpt-5.5"]
+    Weather --> Model
+    Weather -->|"SigV4 MCP / InvokeGateway"| Gateway["専用AgentCore Gateway / AWS_IAM"]
+    Gateway -->|"GatewayTarget"| Target["WeatherTimeMock"]
+    Target -->|"GATEWAY_IAM_ROLE"| Lambda["Lambda / get_weather・get_time"]
     App --> Session["AgentCoreMemorySession"]
     Session --> Memory["AgentCore Memory / 30日"]
     App -->|"SSE"| Caller
 ```
 
-AgentCore Runtime、Memory、CDKスタックは`us-east-2`専用です。モデル呼び出しはRuntime実行ロールの標準AWS認証情報チェーンとSigV4を使用します。OpenAI API key、Bedrock API key、静的AWS認証情報は設定しません。
+AgentCore Runtime、Memory、Gateway、GatewayTarget、Lambda、CDKスタックは`us-east-2`専用です。モデル呼び出しとGatewayのMCP transportは、Runtime実行ロールの標準AWS認証情報チェーンとSigV4を使用します。MCP transportの署名には`mcp-proxy-for-aws`を使用し、独自の署名処理は実装しません。OpenAI API key、Bedrock API key、Bearer token、静的AWS認証情報は設定しません。
 
 ## ディレクトリ構成
 
@@ -31,6 +37,7 @@ agents/
     ├── contracts.py
     ├── models.py
     ├── agent_factory.py
+    ├── gateway_tools.py
     ├── session.py
     ├── service.py
     └── runtime.py
@@ -38,9 +45,10 @@ agents/
 
 - `contracts.py`: 入力検証、HTTPエラー、SSEイベント
 - `models.py`: Bedrock provider付きResponses model
-- `agent_factory.py`: Manager / Weather AgentとAgent-as-Tool
+- `agent_factory.py`: Manager / Weather Agent、Agent-as-Tool、Gateway利用可否別instructions
+- `gateway_tools.py`: SigV4 MCP transport、Tool allowlist、結果検証、安全なToolエラー変換
 - `session.py`: AgentCore Memoryを永続化先とするSession
-- `service.py`: stream全消費、commit / rollback、SSE変換
+- `service.py`: MCP接続、stream全消費、cleanup、commit / rollback、SSE変換
 - `runtime.py`: `BedrockAgentCoreApp`と依存注入境界
 - `main.py`: トレース無効化とポート8080での起動
 
@@ -53,6 +61,8 @@ agents/
 | `openai-agents` | `0.19.4` |
 | `openai[bedrock]` | `2.53.0` |
 | `bedrock-agentcore` | `1.20.0` |
+| `mcp-proxy-for-aws` | `1.6.4` |
+| `mcp` | `1.29.0` |
 
 ## 環境変数
 
@@ -62,8 +72,27 @@ agents/
 | `BEDROCK_OPENAI_MODEL_ID` | `openai.gpt-5.5` | いいえ |
 | `OPENAI_AGENTS_DISABLE_TRACING` | `1` | いいえ |
 | `AGENTCORE_MEMORY_ID` | CDKで作成したMemory ID | いいえ |
+| `AGENTCORE_GATEWAY_URL` | CDKで作成した専用GatewayのHTTPS `/mcp` URL | いいえ |
+| `AGENTCORE_GATEWAY_TARGET_NAME` | `WeatherTimeMock` | いいえ |
 
-値の欠落や固定値との不一致は、安全な起動時設定エラーとして扱います。`OPENAI_API_KEY`、`AWS_BEARER_TOKEN_BEDROCK`、`AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY`をアプリケーション設定へ追加しないでください。
+値の欠落や固定値との不一致は、安全な起動時設定エラーとしてstream開始前に扱います。Gateway URLはHTTPS、`us-east-2`のAgentCore Gateway host、`/mcp` pathであることを検証し、Target名はGatewayTargetの許容文字と長さを検証します。URLやTarget名をエラー応答へ含めません。`OPENAI_API_KEY`、`AWS_BEARER_TOKEN_BEDROCK`、`AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY`をアプリケーション設定へ追加しないでください。
+
+## Weather／TimeモックTool
+
+マネージャーAgentの直接Toolは`weather_agent`だけです。GatewayのMCP ToolはWeather Agentだけへ登録し、Handoffは使用しません。
+
+| 用途 | MCP公開名 | 必須入力 | 固定モック出力 |
+| --- | --- | --- | --- |
+| 天気 | `WeatherTimeMock___get_weather` | 空白だけでない`location` | 入力`location`、`weather="72 degrees Fahrenheit, Sunny"`、`data_type="mock"` |
+| 時刻 | `WeatherTimeMock___get_time` | 空白だけでない`timezone` | 入力`timezone`、`local_time="2:30 PM"`、`data_type="mock"` |
+
+`AGENTCORE_GATEWAY_TARGET_NAME`から組み立てた上記2つの完全一致名だけをallowlistへ設定します。正常結果も`data_type="mock"`とToolごとの必須フィールドを検証してからWeather Agentへ渡します。Lambdaの`error`、MCPの`isError`、transport／Tool例外、JSONやフィールドの形式異常は、内部値を含まない固定の取得不能結果へ変換します。
+
+Modelは初回の有効な呼び出し時に生成し、Runtime process内で再利用します。一方、MCP serverとAgent bundleは`POST /invocations`ごとに生成し、接続、MCP `initialize`、`tools/list`、Agent実行、`cleanup`を同じ非同期タスクで完結させます。MCP session、Tool一覧cache、Gateway利用可否を別の呼び出しと共有しません。
+
+- MCP接続または初回`tools/list`が失敗しても、部分接続を期限内に`cleanup`できた場合は、MCPなしのWeather Agentが取得不能を返します。この回答は正常な会話結果としてMemoryへcommitし、`completed`を返します。
+- 接続後のtransport、Tool、Lambdaまたは結果形式の障害は固定の利用不能Tool結果へ変換し、Weather AgentとマネージャーAgentが取得不能を返します。取得していない固定値、システム時計、学習済み知識または推測値で補いません。
+- `cleanup`失敗、Runner／Session／Memoryの致命的失敗ではMemoryへcommitせず、`rollback`して安全なSSE `error`を返します。キャンセル時は`cleanup`と`rollback`を試行して元のキャンセルを再送出し、切断済みクライアントへ追加eventを送りません。
 
 ## HTTP入力契約
 
@@ -89,7 +118,7 @@ agents/
 ```text
 data: {"type":"text_delta","delta":"現在、"}
 
-data: {"type":"text_delta","delta":"天気取得Toolは未実装です。"}
+data: {"type":"text_delta","delta":"東京の天気は72 degrees Fahrenheit, Sunnyです。テスト用の固定モックであり、現在の実天気ではありません。"}
 
 data: {"type":"completed"}
 ```
@@ -120,26 +149,60 @@ AgentCore Memoryの短期記憶イベントには、次のJSON documentを`blob`
 sequenceDiagram
     participant Caller as 呼び出し元
     participant App as Runtime
+    participant MCP as request単位MCP server
+    participant Gateway as 専用AgentCore Gateway
     participant Runner as Agents SDK Runner
     participant Session as AgentCoreMemorySession
     participant Memory as AgentCore Memory
 
     Caller->>App: prompt / actor_id
     App->>App: bodyとcontext.session_idを検証
-    App->>Runner: run_streamed(session)
-    Session->>Memory: ListEvents（全ページ）
-    loop 生成中
-        Runner-->>App: ResponseTextDeltaEvent
-        App-->>Caller: text_delta
+    App->>MCP: connect
+    opt transport接続成功
+        MCP->>Gateway: initialize（SigV4）
+        Gateway-->>MCP: protocol確立
     end
-    Runner->>Session: add_items（未確定buffer）
-    alt 全event消費とMemory書き込みが成功
+    opt connect・initialize成功
+        App->>MCP: tools/list
+        MCP->>Gateway: tools/list（接頭辞付き2 Tool）
+        Gateway-->>MCP: get_weather / get_time
+    end
+    alt connect・initialize・list成功
+        App->>Runner: run_streamed（MCP付きAgent bundle / session）
+        Session->>Memory: ListEvents（全ページ）
+        opt 天気・時刻の依頼
+            Runner->>MCP: 接頭辞付きMCP Toolを呼び出す
+            MCP->>Gateway: tools/call（SigV4）
+            Gateway-->>MCP: 固定mockまたは固定の利用不能結果
+            MCP-->>Runner: 検証済みTool結果
+        end
+        loop 生成中
+            Runner-->>App: ResponseTextDeltaEvent
+            App-->>Caller: text_delta
+        end
+        Runner->>Session: add_items（未確定buffer）
+        App->>MCP: cleanup
         App->>Session: commit
         Session->>Memory: CreateEvent(append / clientToken)
         App-->>Caller: completed
-    else モデル・Session・Memory失敗または切断
+    else connect・initialize・list失敗かつcleanup成功
+        App->>MCP: cleanup
+        App->>Runner: run_streamed（MCPなしの利用不能Agent bundle）
+        Session->>Memory: ListEvents（全ページ）
+        Runner-->>App: 取得不能のtext_delta
+        App-->>Caller: text_delta
+        Runner->>Session: add_items（未確定buffer）
+        App->>Session: commit
+        Session->>Memory: CreateEvent(append / clientToken)
+        App-->>Caller: completed
+    else cleanup・Runner・Session・Memoryの致命的失敗
+        App->>MCP: cleanup（未試行の場合）
         App->>Session: rollback
-        App-->>Caller: error（接続中のみ）
+        App-->>Caller: error
+    else 呼び出しのキャンセル
+        App->>MCP: cleanup（best effort）
+        App->>Session: rollback（best effort）
+        App-->>App: CancelledErrorを再送出
     end
 ```
 
@@ -153,6 +216,18 @@ sequenceDiagram
 uv lock --check
 uv run pytest
 uv run python app.py
+```
+
+Weather／Time統合だけを絞って確認する場合は、次の決定的テストを実行します。Fake MCP、決定的Model、依存注入を使用するため、実Gateway、実Lambda、実Model、実Memoryへ接続しません。
+
+```bash
+uv run pytest \
+  tests/unit/test_weather_tool_handler.py \
+  tests/unit/agent/test_gateway_tools.py \
+  tests/unit/agent/test_agent_factory.py \
+  tests/unit/agent/test_service.py \
+  tests/unit/agent/test_runtime.py \
+  tests/integration/agent/test_multi_agent.py
 ```
 
 Linux ARM64イメージを構築します。
@@ -182,11 +257,13 @@ curl --no-buffer --request POST http://localhost:8080/invocations \
 
 異常SSEはコンテナへ`CONTAINER_TEST_MODE=error`を追加して確認できます。
 
-## デプロイと呼び出し
+## 明示承認後のデプロイとRuntime E2E
 
 以下は、検証用AWSアカウントへ初めてデプロイし、AgentCore Runtimeの応答と会話履歴を確認するまでの手順です。このスタックは`us-east-2`専用であり、別リージョンへはデプロイできません。デプロイ、Runtime呼び出し、ログ保存にはAWS利用料金が発生する可能性があります。
 
 `cdk deploy`、Runtime呼び出し、`cdk destroy`はAWS環境を変更するため、対象アカウントと実行内容を確認し、作業依頼者の明示的な承認を得てから実行してください。
+
+ローカルテスト、CDK synth、コンテナ検証の成功は、AWS操作やRuntime E2Eの承認を意味しません。明示承認がない場合はこの節のコマンドを実行せず、「ローカル実装・検証済み／AWS E2E未検証」として扱います。
 
 ### 1. 前提ソフトウェアを確認する
 
@@ -253,7 +330,7 @@ aws sts get-caller-identity --profile "$DEPLOY_PROFILE"
 
 default profileの認証情報を使用する場合は、`--profile "$DEPLOY_PROFILE"`を省略し、`aws sts get-caller-identity`を実行します。`get-caller-identity`の`Account`と`Arn`が、デプロイを許可された検証環境であることを必ず確認してください。
 
-デプロイ主体には、CDK bootstrapで作成されたデプロイロールを引き受ける権限と、このスタックが使用するCloudFormation、ECR、IAM、AgentCore Runtime、AgentCore Memoryの操作権限が必要です。Runtimeの呼び出し主体には、対象Runtime ARNに対する`bedrock-agentcore:InvokeAgentRuntime`を許可します。Runtime自身がモデルとMemoryへアクセスする実行ロールは、このCDKスタックが作成します。
+デプロイ主体には、CDK bootstrapで作成されたデプロイロールを引き受ける権限と、このスタックが使用するCloudFormation、ECR、IAM、Lambda、AgentCore Runtime、Memory、Gateway、GatewayTargetの操作権限が必要です。Runtimeの呼び出し主体には、対象Runtime ARNに対する`bedrock-agentcore:InvokeAgentRuntime`を許可します。Runtime自身がモデル、Memory、対象の専用Gatewayへアクセスする実行ロールと、GatewayTargetから対象Lambdaを呼び出すロールは、このCDKスタックが作成します。
 
 ### 3. ローカル検証とARM64イメージの構築を行う
 
@@ -301,11 +378,13 @@ cdk diff OpenAiAgentCoreBaseStack \
 
 少なくとも次を確認します。
 
-- AgentCore RuntimeとMemoryがそれぞれ1つ作成される
+- AgentCore Runtime、Memory、専用Gateway、`WeatherTimeMock` GatewayTarget、Weather／TimeモックLambdaが作成される
 - RuntimeがLinux ARM64、Public network、IAM inbound認証で構成される
+- Gatewayが`AWS_IAM`認証で、MCP protocol version `2025-11-25`と`2025-03-26`をサポートする
+- GatewayTargetがインラインスキーマで`get_weather`と`get_time`だけを対象Lambdaへ公開する
 - Memoryの保持期間が30日で、削除ポリシーが`DESTROY`である
-- Runtime実行ロールに、想定したBedrock Mantleのモデル呼び出し権限と対象Memoryの読み書き権限が付与される
-- 環境変数にAPI key、アクセスキー、秘密情報が含まれない
+- Runtime実行ロールに、想定したBedrock Mantleのモデル呼び出し権限、対象Memoryの読み書き権限、対象Gatewayだけの`bedrock-agentcore:InvokeGateway`が付与される
+- Runtime環境変数に`AGENTCORE_GATEWAY_URL`と`AGENTCORE_GATEWAY_TARGET_NAME`があり、API key、アクセスキー、秘密情報が含まれない
 - 想定外のリソース削除や権限拡大がない
 
 差分に問題がなければデプロイします。IAM権限が拡大される場合に確認を省略しないよう、`broadening`を指定します。
@@ -318,7 +397,7 @@ cdk deploy OpenAiAgentCoreBaseStack \
 
 CDKはLinux ARM64のコンテナイメージを構築し、bootstrap用ECRへpushした後、CloudFormationスタックを更新します。デプロイに失敗した場合は、同じコマンドを繰り返す前にCloudFormation eventと後述のRuntime状態を確認してください。
 
-### 6. RuntimeとMemoryの作成結果を確認する
+### 6. Runtime、GatewayTarget、Lambda、Memoryの作成結果を確認する
 
 Runtime一覧から、このスタックが作成した`OpenAiAgentRuntime`のARN、ID、version、状態を確認します。
 
@@ -330,7 +409,9 @@ aws bedrock-agentcore-control list-agent-runtimes \
   --output table
 ```
 
-Runtimeの状態が`READY`になってから呼び出します。続けて、IDのprefixが`OpenAiAgentMemory-`であるMemoryが作成され、状態が`ACTIVE`であることを確認します。`list-memories`のsummaryにはMemory名が含まれないため、CDKがMemory名から生成するIDのprefixで絞り込みます。
+Runtimeを呼び出す前に、専用Gatewayと`WeatherTimeMock` GatewayTargetが`READY`、`OpenAiWeatherTimeMock` Lambdaが作成済みであることも、CloudFormationのリソースとAgentCore／Lambdaの各control planeで確認します。Targetが準備中または失敗状態のままRuntime E2Eへ進めません。
+
+続けて、IDのprefixが`OpenAiAgentMemory-`であるMemoryが作成され、状態が`ACTIVE`であることを確認します。`list-memories`のsummaryにはMemory名が含まれないため、CDKがMemory名から生成するIDのprefixで絞り込みます。
 
 ```bash
 aws bedrock-agentcore-control list-memories \
@@ -371,6 +452,44 @@ cat response-1.txt
 
 `response-1.txt`に1件以上の`text_delta`が出力され、最後に`completed`が1回だけ出力されることを確認します。`error`と`completed`が同時に出力されてはいけません。
 
+続けて、天気と時刻を別sessionで呼び出し、Manager→Weather→Gateway→GatewayTarget→Lambda→Weather→ManagerのRuntime E2Eを確認します。
+
+```bash
+export WEATHER_SESSION_ID='aws-weather-session-0000000000000001'
+export TIME_SESSION_ID='aws-time-session-00000000000000000001'
+
+aws bedrock-agentcore invoke-agent-runtime \
+  --region "$DEPLOY_REGION" \
+  --profile "$DEPLOY_PROFILE" \
+  --agent-runtime-arn "$AGENT_RUNTIME_ARN" \
+  --qualifier DEFAULT \
+  --runtime-session-id "$WEATHER_SESSION_ID" \
+  --content-type application/json \
+  --accept text/event-stream \
+  --cli-binary-format raw-in-base64-out \
+  --cli-read-timeout 0 \
+  --payload '{"prompt":"東京の天気を教えてください。","actor_id":"aws-weather-user-001"}' \
+  response-weather.txt
+
+aws bedrock-agentcore invoke-agent-runtime \
+  --region "$DEPLOY_REGION" \
+  --profile "$DEPLOY_PROFILE" \
+  --agent-runtime-arn "$AGENT_RUNTIME_ARN" \
+  --qualifier DEFAULT \
+  --runtime-session-id "$TIME_SESSION_ID" \
+  --content-type application/json \
+  --accept text/event-stream \
+  --cli-binary-format raw-in-base64-out \
+  --cli-read-timeout 0 \
+  --payload '{"prompt":"Asia/Tokyoの時刻を教えてください。","actor_id":"aws-time-user-001"}' \
+  response-time.txt
+
+cat response-weather.txt
+cat response-time.txt
+```
+
+天気応答には`72 degrees Fahrenheit, Sunny`、時刻応答には`2:30 PM`が含まれ、それぞれ現在の実データではなくテスト用固定モックであることが日本語で明示されることを確認します。両応答とも最後は`completed`だけで終了します。これらは接続確認用の固定値であり、実在する天気、予報または現在時刻として利用できません。
+
 ### 8. 会話履歴と分離境界を確認する
 
 同じ`actor_id`と同じ`runtime-session-id`でもう一度呼び出し、直前の正常完了済み履歴が復元されることを確認します。
@@ -399,7 +518,9 @@ cat response-2.txt
 | 履歴継続 | 同じ | 同じ | 正常完了済みの過去履歴を参照する |
 | 利用者分離 | 変更 | 同じ | 別の利用者の履歴を参照しない |
 | 会話分離 | 同じ | 変更 | 別sessionの履歴を参照しない |
-| Weather Agent | 任意 | 任意 | 実天気を推測せず、取得手段がないことを回答する |
+| Weather Agent（天気） | 任意 | 任意 | 固定天気値と、現在の実天気ではない旨を返す |
+| Weather Agent（時刻） | 任意 | 任意 | 固定時刻値と、現在の実時刻ではない旨を返す |
+| Gateway／Tool利用不能 | 任意 | 任意 | 固定値や推測値で代替せず、取得不能を返す |
 
 異なるsessionを試す場合も、33～100文字の一意な`runtime-session-id`を使用してください。同じsessionへの並行呼び出しは、このPoCの対象外です。
 
@@ -434,11 +555,12 @@ aws logs tail "$AGENT_LOG_GROUP" \
 
 代表的な確認点は次のとおりです。
 
-- `AccessDeniedException`: 呼び出し主体の`bedrock-agentcore:InvokeAgentRuntime`、Runtime実行ロール、組織のSCPを確認する
+- `AccessDeniedException`: 呼び出し主体の`bedrock-agentcore:InvokeAgentRuntime`、Runtime実行ロールの対象Gatewayへの`bedrock-agentcore:InvokeGateway`、Gateway実行ロールの対象Lambda呼び出し権限、組織のSCPを確認する
 - モデル呼び出し失敗: `us-east-2`で`openai.gpt-5.5`を利用できることと、Runtime実行ロールのBedrock Mantle権限を確認する
+- 天気・時刻が取得不能になる: Gatewayと`WeatherTimeMock` Targetの状態、Runtimeの`AGENTCORE_GATEWAY_URL`／`AGENTCORE_GATEWAY_TARGET_NAME`、Targetの2 Tool、Lambda logを確認する。取得不能回答自体には内部endpointや例外を表示しない
 - `exec format error`: imageがLinux ARM64で構築されていることを`docker buildx`で再確認する
-- HTTP 500またはSSEの`error`: クライアントへ詳細を返さない設計のため、Runtime logで設定、モデル、Memoryの例外を確認する
-- timeout: 初回起動を考慮してAWS CLIのread timeoutを無効化し、Runtime状態とlogを確認する
+- HTTP 500またはSSEの`error`: クライアントへ詳細を返さない設計のため、Runtime logで設定、モデル、MCP cleanup、Session、Memoryの障害段階を確認する
+- timeout: 初回起動とMCPのtransport／client session／cleanup timeoutを区別し、AWS CLIのread timeout、Runtime／Gateway／Target状態、Runtime logを確認する
 
 ログや問い合わせ資料へ、入力本文、認証情報、個人情報を必要以上に転載しないでください。
 
@@ -457,6 +579,9 @@ cdk destroy OpenAiAgentCoreBaseStack \
 
 ### 参考資料
 
+- [ADR-0001: Bedrock MantleとRuntime Role SigV4](../ADR/adr-0001-use-bedrock-mantle-with-runtime-role-sigv4.md)
+- [ADR-0002: Agents-as-Tools](../ADR/adr-0002-use-agents-as-tools.md)
+- [ADR-0003: Weather専用AgentCore Gateway](../ADR/adr-0003-use-dedicated-agentcore-gateway-for-weather-tools.md)
 - [AWS CDKの前提条件](https://docs.aws.amazon.com/cdk/v2/guide/prerequisites.html)
 - [AWS CDK環境のbootstrap](https://docs.aws.amazon.com/cdk/v2/guide/bootstrapping-env.html)
 - [AWS CDKアプリケーションのデプロイ](https://docs.aws.amazon.com/cdk/v2/guide/deploy.html)
@@ -473,4 +598,6 @@ cdk destroy OpenAiAgentCoreBaseStack \
 - 保存期間を将来変更しても、既存eventの期限が延長されるとは限りません。
 - Memoryには`RemovalPolicy.DESTROY`を設定しています。`cdk destroy`またはstack削除でPoC会話履歴は復旧不能になります。
 - RuntimeはIAM inbound認証、Public network、DEFAULT endpoint、AgentCore高度トレーシング無効のPoC構成です。
+- GatewayはWeather／Timeモック専用で、Weather Agentだけがリクエスト単位のSigV4 MCP接続を持ちます。ManagerへGateway Toolを直接登録しません。
+- `get_weather`と`get_time`は接続検証用の固定モックです。外部の天気／時刻サービスやシステム時計へ接続せず、本番データとして利用できません。
 - 本番利用には最小権限化、閉域化、監視、アラーム、同時実行制御などの追加設計が必要です。

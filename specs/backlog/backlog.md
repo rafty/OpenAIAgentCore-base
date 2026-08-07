@@ -10,13 +10,17 @@
 - Bedrock上のAgentのデバッグができるようにログなどを整備する。
 - Amazon Bedrock AgentCore のオブザーバビリティが適切ならそれを対応する。
 
+---
 
-# マルチエージェントのスペシャリストエージェントのTool実装
+# Amazon Bedrock Managed Knowledge Base
 
-- 2026.08.05
-- 作成者: rafty
-- 天気予報エージェントのToolは、`lambda_tools/weather`にコードがあります。
-- ツールスキーマは`lambda_tools/weather/tools.json`にあります。
+- Bedrock Managed Knowledge BaseをRAGサービスとして利用する。
+- S3にドキュメントを配置する
+- S3のネイティブコネクターを使用する
+
+
+# SQLでDBに問い合わせするAgent & MCP?サーバ
+- 見積もり用DBにSQLで問い合わせするAgent & MCP?サーバを実装する。
 
 ---
 
@@ -58,3 +62,13 @@ CloudWatch Logsへの独自出力だけで完結させず、Amazon Bedrock Agent
 - AgentCore Observability、トレース、アプリケーションログ、メトリクス、アラームを設計し、記録項目と機密情報・個人情報のマスキング方針を定義する。
 - AgentCore Memoryの保存期間、利用者分離、暗号化キー、削除要求、バックアップまたは復旧、長期記憶戦略の要否を定義する。
 - 同時セッション数、呼び出し時間、モデルおよびMemoryのクォータを確認し、コスト予算とアラートを設定する。
+
+---
+
+# Weather／Time Toolの実データ化
+
+- 2026.08.07
+- 作成者: codex
+- `specs/05-agent-tool-weather-01/`で提供する天気・時刻情報は、外部サービスへ接続しない固定モックだけであり、現在の実天気または実時刻を提供しない。
+- 実天気／実時刻の取得は後続要件とし、外部サービスの選定、認証方式、利用制限、入力・出力契約および障害時の振る舞いを設計してから実装する。
+- 高度な運用対応は、上記「本番運用対応」を共通の正本とし、Weather／Time固有の要件が生じた場合だけ後続featureで追加する。
