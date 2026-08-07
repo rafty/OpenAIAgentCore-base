@@ -1,0 +1,14 @@
+{
+  "metadataAttributes": {
+    "document_type": "monitoring",
+    "version": "1.0",
+    "system_type": "aws",
+    "environment": [
+      "development",
+      "production"
+    ],
+    "service": [
+      "cloudwatch"
+    ]
+  }
+}

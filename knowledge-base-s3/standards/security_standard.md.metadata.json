@@ -1,0 +1,21 @@
+{
+  "metadataAttributes": {
+    "document_type": "security",
+    "version": "1.0",
+    "system_type": "aws",
+    "environment": [
+      "production"
+    ],
+    "service": [
+      "ebs",
+      "guardduty",
+      "iam",
+      "identity_center",
+      "kms",
+      "rds",
+      "s3",
+      "secrets_manager",
+      "security_hub"
+    ]
+  }
+}

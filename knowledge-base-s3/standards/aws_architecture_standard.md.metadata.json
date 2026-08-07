@@ -1,0 +1,16 @@
+{
+  "metadataAttributes": {
+    "document_type": "architecture",
+    "version": "1.0",
+    "system_type": "aws",
+    "environment": [
+      "production"
+    ],
+    "service": [
+      "alb",
+      "ec2",
+      "rds",
+      "systems_manager"
+    ]
+  }
+}

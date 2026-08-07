@@ -1,0 +1,18 @@
+{
+  "metadataAttributes": {
+    "document_type": "past_project",
+    "version": "1.0",
+    "system_type": "aws",
+    "environment": [
+      "development",
+      "production"
+    ],
+    "service": [
+      "alb",
+      "cloudwatch",
+      "ec2",
+      "rds"
+    ],
+    "project_name": "sample_project_alpha"
+  }
+}

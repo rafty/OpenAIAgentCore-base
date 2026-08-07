@@ -1,0 +1,16 @@
+{
+  "metadataAttributes": {
+    "document_type": "estimation",
+    "version": "1.0",
+    "system_type": "aws",
+    "environment": [
+      "development",
+      "production"
+    ],
+    "service": [
+      "cloudwatch",
+      "ec2",
+      "rds"
+    ]
+  }
+}
