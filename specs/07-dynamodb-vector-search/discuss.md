@@ -2500,3 +2500,251 @@ Step　Functionsを使わないという選択肢も増えるのでしょうか�
 ```
 
 # 回答 5
+はい、Step Functionsを使わない選択肢は明確に増えました。ただし、Durable FunctionsはBFFの15分制限を直接なくすものではありません。
+
+通常のLambda呼び出しと、Durable Functionsの1回ごとの実行は最大15分のままです。Durable Functionsは処理をチェックポイントで区切り、Lambdaを停止・再開することで、非同期ワークフロー全体を最大1年間継続させます。同期呼び出しは引き続き最大15分で、1年まで実行できるのは非同期呼び出しです。[AWS公式の呼び出し仕様](https://docs.aws.amazon.com/lambda/latest/dg/durable-invoking.html)
+
+今回の推奨構成は次です。
+
+```mermaid
+flowchart LR
+    React["React"] -->|"Cognito認証"| API["API Gateway"]
+    API --> BFF["通常のLambda BFF"]
+
+    BFF -->|"短時間の会話・SSE"| AgentCore["AgentCore Runtime"]
+    BFF -->|"見積ジョブを非同期開始"| Durable["Lambda Durable Function"]
+
+    Durable -->|"案件分析・見積処理"| AgentCore
+    Durable --> DynamoDB["DynamoDB<br/>案件・見積・進捗"]
+    Durable --> Bedrock["Amazon Bedrock"]
+    Durable --> EventBridge["EventBridge<br/>状態変更"]
+
+    React -->|"job_idで状態取得"| BFF
+    EventBridge --> Notify["通知／状態更新"]
+```
+
+この構成では処理を2種類に分けます。
+
+- 通常Lambda BFF
+  - React向けAPI
+  - 認可と入力検証
+  - 短時間のAgentCore呼び出し
+  - SSEストリーミング中継
+  - 見積ジョブの開始と状態取得
+
+- Lambda Durable Function
+  - RFP分析
+  - 要件・構成の整理
+  - AgentCoreの複数回呼び出し
+  - 類似案件検索
+  - 見積Draft作成
+  - 人による確認待ち
+  - 再試行、補償処理、途中状態の保存
+
+重要なのは、Durable FunctionをReactから同期的に呼んで結果が出るまで接続を維持しないことです。BFFは`job_id`を返し、Reactは状態取得APIや通知で進捗を確認します。元のHTTP/SSE接続を、Durable Functionの中断・再開をまたいで維持する仕組みではありません。
+
+## Step Functionsを外しやすい条件
+
+次の条件なら、第一段階ではStep Functionsを使わず、Durable Functionsだけで十分な可能性があります。
+
+- 処理の中心がLambdaとAgentCoreである
+- 同じ開発チームがワークフローと業務ロジックを管理する
+- Pythonなどの通常コードで順次処理を書きたい
+- 主な流れが「分析→検索→計算→保存→確認待ち」のように比較的直線的
+- ワークフローの視覚的な編集より、単体テストやIDEでの開発を重視する
+- 個々のAgentCore呼び出しや計算処理は15分以内に完了する
+
+Durable Functionsには、ステップの再試行、チェックポイント、待機、callback、条件待ち、並列実行、冪等な実行名などが用意されています。[Lambda Durable Functions概要](https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html)
+
+## Step Functionsを残した方がよい条件
+
+次の要件が強い場合は、Step Functionsが適しています。
+
+| 観点 | Durable Functions | Step Functions |
+|---|---|---|
+| 主目的 | Lambda内の業務ロジック | AWSサービス横断のオーケストレーション |
+| 定義方法 | Pythonなどのコード | 状態機械・グラフ |
+| 可視性 | 開発者向け実行履歴 | ワークフロー全体を視覚化 |
+| AWS連携 | SDK呼び出しを実装 | 220以上のサービスへネイティブ連携 |
+| 運用責任 | runtime・SDK・replayを考慮 | ワークフロー基盤は完全マネージド |
+| 主な利用者 | アプリ開発チーム | 開発、運用、業務担当者 |
+| 適合例 | Agentの内部処理 | 承認、分岐、複数システム連携 |
+
+AWSも、Lambda中心で業務ロジックと密結合する場合はDurable Functions、複数AWSサービスの連携、視覚的なワークフロー、部門横断の可視性が必要ならStep Functionsと整理しています。[AWS公式比較](https://docs.aws.amazon.com/lambda/latest/dg/durable-step-functions.html)
+
+Palantir AIPに近づける観点では、次のような「業務プロセス自体を管理対象にする」段階になると、Step Functionsの利点が大きくなります。
+
+- 見積担当者、技術責任者、営業責任者による多段階承認
+- 承認待ち、差し戻し、再見積などの状態を業務担当者にも見せる
+- どのAgent・Tool・データ・承認者が意思決定へ関与したか監査する
+- ワークフローを開発者以外も確認する
+- S3、Textract、Bedrock、AgentCore、DynamoDB、通知などを横断する
+- 業務プロセスとAgentの内部実装を別々に変更する
+
+つまり、Durable Functionsは「Agentの内部ワークフロー」に適し、Step Functionsは「会社として管理する業務ワークフロー」に適します。Palantir AIPに近い方向では、後者の重要度が高くなります。
+
+## Durable Functions固有の注意点
+
+Durable Functionsにも設計上の制約があります。
+
+- 1回のLambda実行は最大15分
+- 15分を超える単一処理は分割、非同期API化、またはECS/Fargateなどが必要
+- replayされるため、コードは決定的にする必要がある
+- 外部書き込みなどの副作用はチェックポイント対象のstepへ入れる
+- 実行中にstep名や意味を変更すると、再開処理を壊す可能性がある
+- 本番ではLambdaのversion／aliasを固定する
+- step結果は1件256KB、永続化データ全体や操作数にも上限がある
+- durable operation、書き込みデータ量、保持期間に別途料金が発生する
+
+特にreplayを壊さないversion管理はStep Functionsよりアプリケーション側の責任が大きくなります。[Durable Functionsのベストプラクティス](https://docs.aws.amazon.com/lambda/latest/dg/durable-best-practices.html)、[料金体系](https://aws.amazon.com/lambda/pricing/#Lambda_Durable_Functions_Pricing)
+
+また、Durable Functionsは既存Lambdaへ後から有効化できず、新しいLambdaとして作成する必要があります。[設定仕様](https://docs.aws.amazon.com/lambda/latest/dg/durable-configuration.html)
+
+このプロジェクトでは、[pyproject.toml](/Users/aa003103/PycharmProjects/OpenAIAgentCore-base/pyproject.toml:4)がPython 3.12以上、既存Lambdaも[Python 3.12](/Users/aa003103/PycharmProjects/OpenAIAgentCore-base/agent_core_cdk_stack/constructs/weather_time_mock_lambda_construct.py:42)です。一方、Durable FunctionsのPython管理runtimeは現在3.13／3.14です。そのため、Durable Orchestratorは新規のPython 3.13または3.14 Lambdaとして作るのが自然です。[対応runtime](https://docs.aws.amazon.com/lambda/latest/dg/durable-supported-runtimes.html)
+
+`us-east-1`には提供されているため、現在のPoCリージョンとは整合します。[リージョン拡大のお知らせ](https://aws.amazon.com/about-aws/whats-new/2025/12/lambda-durable-functions-14-additional-regions/)
+
+結論として、今回のPoCまたは初期版では次を第一候補にできます。
+
+> React − API Gateway − 通常Lambda BFF − 非同期Lambda Durable Function − AgentCore/DynamoDB
+
+一方、承認・差し戻し・監査・部門横断の可視化を本格化してPalantir AIPに近づける段階では、Step Functionsを再採用する、または「業務全体はStep Functions、Agent内部はDurable Functions」という併用構成が適しています。
+
+# 質問 6
+```text
+Durable Functionsで処理がシンプルになるのであれば使いたいですが、
+Palantir AIPに近づけるのにStep Functionsを使ったほうが良いというのであれば、Step Functionsを使う方針にしたいです。
+```
+
+# 回答 6
+その優先順位なら、Step Functionsを採用する方針が適切です。
+
+Durable Functionsはコード中心の処理を簡潔にできますが、Palantir AIPに近づけるうえで重要なのは、単なる長時間実行よりも次の点です。
+
+- 業務プロセスの可視化
+- 人による確認・承認・差し戻し
+- Agentが実行したActionの監査
+- どのデータとルールを根拠に判断したかの追跡
+- 業務状態とAgent内部処理の分離
+- 開発者以外も理解できるワークフロー
+
+これらは、コード内にワークフローを埋め込むDurable Functionsより、独立した状態機械として管理するStep Functionsの方が適しています。AWS公式の整理でも、Lambda中心のアプリケーションロジックはDurable Functions、複数AWSサービスの連携、視覚的な設計、部門横断の可視性が必要ならStep Functionsとされています。[AWS公式比較](https://docs.aws.amazon.com/lambda/latest/dg/durable-step-functions.html)
+
+## 推奨する全体構成
+
+```mermaid
+flowchart LR
+    React["React"] -->|"Cognito認証"| API["API Gateway"]
+    API --> BFF["Lambda BFF"]
+
+    BFF -->|"会話・SSE"| AgentCore["AgentCore Runtime"]
+    BFF -->|"見積処理開始"| SFN["Step Functions<br/>Standard Workflow"]
+    BFF -->|"状態・結果取得"| DynamoDB["DynamoDB"]
+
+    SFN --> Input["案件情報の検証・保存"]
+    Input --> Requirement["要件・構成確認<br/>AgentCore"]
+    Requirement --> HumanCheck["利用者確認待ち"]
+    HumanCheck --> Estimation["類似案件検索・見積<br/>Estimation Agent"]
+    Estimation --> Draft["見積Draft保存"]
+    Draft --> Approval["承認・差し戻し"]
+    Approval --> Complete["見積確定"]
+
+    Requirement --> AgentCore
+    Estimation --> AgentCore
+    Estimation --> DynamoDB
+    Draft --> DynamoDB
+    Approval --> DynamoDB
+```
+
+## コンポーネントの責務
+
+### React
+
+- RFP、案件情報、構成情報の入力
+- Agentとの会話
+- 見積処理の開始
+- ワークフロー進捗の表示
+- 要件・構成・見積Draftの確認
+- 承認、差し戻し、再実行
+
+### Lambda BFF
+
+- Cognito認証情報に基づく認可
+- React向けAPI契約
+- 入力検証
+- Step Functionsの実行開始
+- 実行IDをReactへ返却
+- 進捗・結果取得API
+- 短時間のAgentCore呼び出しとSSE中継
+
+BFFは短時間処理に限定するため、Lambdaの15分制限を問題にしにくくできます。
+
+### Step Functions Standard Workflow
+
+- 見積業務全体の状態管理
+- AgentCore呼び出しの順序制御
+- 再試行、タイムアウト、異常終了
+- 並列処理
+- 人による確認・承認待ち
+- 差し戻しと再実行
+- 実行履歴と監査証跡
+- DynamoDB、SNS、EventBridgeなどとの連携
+
+見積や承認は数時間から数日継続する可能性があるため、Express Workflowではなく、長時間実行と実行履歴に適したStandard Workflowを第一候補とします。
+
+### AgentCore
+
+- RFPや自然言語の解釈
+- 要件候補の抽出
+- AWS構成の提案
+- Estimation Agentへの専門処理委譲
+- DynamoDB Toolの選択
+- 結果の説明
+
+Agentは業務状態を管理せず、「現在のStepで必要な判断や生成」を担当します。
+
+### DynamoDB
+
+- 案件
+- 要件
+- AWS構成
+- 見積Draft
+- 類似案件
+- 標準工数・単価・価格マスター
+- 承認状態
+- Agent実行根拠
+- Step Functions実行IDとの関連
+
+Step Functionsの実行履歴だけに業務データを依存させず、業務上の正本はDynamoDBへ保存します。
+
+## Palantir AIPとの対応関係
+
+| Palantir AIP的な要素 | AWSでの担当 |
+|---|---|
+| Ontology／業務オブジェクト | DynamoDBの案件・要件・構成・見積・承認データ |
+| Action | AgentCore Gatewayの業務Tool |
+| AI Agent | Manager／Knowledge／Estimation Agent |
+| Workflow | Step Functions Standard |
+| Human in the loop | React＋Step Functions callback |
+| Policy／権限 | Cognito、IAM、Tool公開境界 |
+| Audit | Step Functions実行履歴、DynamoDB、CloudTrail、CloudWatch |
+| Application UI | React＋Lambda BFF |
+
+重要なのは、Step Functionsを使うだけでPalantir AIPになるわけではない点です。DynamoDBの業務オブジェクト、AgentのAction、認可、承認、監査を一体として設計することで近づきます。
+
+## Durable Functionsの扱い
+
+現時点ではDurable Functionsを採用せず、オーケストレーターをStep Functionsへ統一することを推奨します。両方を最初から併用すると、次の境界が分かりにくくなります。
+
+- どちらが再試行を担当するか
+- どちらが状態の正本か
+- どちらの履歴を監査に使うか
+- タイムアウトや失敗をどちらが判断するか
+
+将来、Step Functionsから呼ぶ特定のLambda内部に、複雑で再開可能な処理が必要になった場合だけDurable Functionsを再検討すれば十分です。
+
+したがって、最終方針は次になります。
+
+> React − API Gateway − Lambda BFF − Step Functions Standard − AgentCore／DynamoDB
+
+Lambda BFFは画面向けの短時間処理、Step Functionsは見積業務全体、AgentCoreはAI判断、DynamoDBは業務データの正本を担当する構成です。
