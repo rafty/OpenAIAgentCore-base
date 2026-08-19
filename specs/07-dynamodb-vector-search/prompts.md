@@ -15,3 +15,25 @@ discuss.mdの中で、Estimation AgentがDynamoDBの情報取得、入力、Vect
 skillのcreate-sdd-specを使って、spec-draft.mdを参照し、specs/07-dynamodb-vector-search/specs.mdを作成してください。
 また、specs.mdには、追加したユースケースに関する`手動確認`の手順をdocs/ManualTesting/README.mdに記載するという要件も追加してください。
 
+
+# for plan.md
+specs.mdが完成したので、skillのcreate-sdd-planを使って、specs/07-dynamodb-vector-search/plan.mdを作成してください。
+
+
+# for tasks.md
+plan.mdが完成したので、skillのcreate-sdd-tasksを使って、specs/07-dynamodb-vector-search/tasks.mdを作成してください。
+
+
+# for executing tasks
+tasks.mdが完成したので、specs/07-dynamodb-vector-search/tasks.mdのタスクを実行し、完了してください。
+specs/07-dynamodb-vector-search/specs.md、 specs/07-dynamodb-vector-search/plan.md、 `docs/ADR/`のADR を参照し、 すべてのコンテキストを考慮してタスクリスト内のタスクを実装してください。 
+タスクを順番に完了することに集中してください。 
+タスクが完了したら、[x] を使用して完了マークを付けてください。 
+各ステップが完了したら、タスクリストのマークとタスクの完了マーク [x] を更新することが非常に重要です。
+実行が不可能なタスクの場合は、タスクの最後の行に`- 未実施理由:`を追加し、未実施の理由を記載してください。
+
+あなたは、AI AgentやAWSの超優秀なエンジニアです。プロフェッショナルな視点で実装してください。
+
+
+## ２度目以降のtasks.mdの実行
+tasks.mdに完了マークがついてないタスクがあります。続けてタスク実行を実施してください。
