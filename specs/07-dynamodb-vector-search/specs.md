@@ -94,7 +94,10 @@ AWSインフラ構築見積では、文書の検索だけでなく、過去案�
 - `components`には、見積対象となるAWSサービス、環境、数量、単位、およびMulti-AZなどの構成条件を含められなければならない。
 - サービス数量、環境、作業範囲、見積基準日など、計算に必要な情報が不足する場合、Estimation Agentは推測で補完せず、Manager Agentを通じて利用者へ確認しなければならない。
 - 構成条件に対応する工数がマスターに未定義の場合、その条件から独自の補正係数を作らず、未反映条件として回答と保存Draftへ記録しなければならない。
-- 利用者が見積Draftの保存を明示していない場合、DynamoDBへ見積Draftを追加してはならない。
+- 利用者が最初の入力で「Draftとして保存する」「Draftを登録する」などの保存意思を明示している場合、システムは必要情報、参照データ、および計算結果の検証に成功した後、追加確認を挟まず同一turnで`DRAFT`を保存しなければならない。
+- 明示的な保存依頼は新規`DRAFT`の作成だけを許可するものであり、承認、確定、既存見積の更新、マスターまたは過去案件の変更を許可するものとして扱ってはならない。
+- 利用者が見積Draftの保存を明示していない場合、または保存意思が曖昧な場合、システムは計算previewを返してもDynamoDBへ見積Draftを追加してはならない。必要な場合はManager Agentが保存意思を確認し、後続turnで明示された場合だけ保存しなければならない。
+- 入力不足、必要マスターの不足・重複・未承認・期限外、計算検証エラー、または保存前検証の失敗がある場合、最初の入力に保存依頼が含まれていてもDraftを保存してはならない。類似案件検索が正常に完了して0件だった場合は保存を妨げるエラーとして扱わない。
 
 ### FR-003: 事前登録データ
 
@@ -111,6 +114,8 @@ dynamodb-seed/
 │   ├── effort-standards.json
 │   ├── rate-cards.json
 │   └── pricing-policies.json
+├── evaluation/
+│   └── search-quality-cases.json
 └── sample-inputs/
     └── sample-project-delta.json
 ```
@@ -119,6 +124,9 @@ dynamodb-seed/
 - `projects/project-summaries.json`はVector検索対象となる`HIST-001`から`HIST-003`の案件サマリーと、Vector Indexのfilterおよびprojectionに必要な属性を持たなければならない。
 - `projects/project-actuals.json`は`HIST-001`から`HIST-003`の正式な構造化実績を持ち、対応するサマリーと同じ`project_id`で関連付けられなければならない。
 - `masters/effort-standards.json`、`masters/rate-cards.json`、`masters/pricing-policies.json`は、それぞれ標準工数、役割別原価単価、価格ポリシーの正本でなければならない。
+- `evaluation/search-quality-cases.json`は、実Embedding検索の品質を再現可能に評価する日本語検索ケースの正本でなければならない。
+- 検索品質ケースは少なくとも6件とし、`HIST-001`、`HIST-002`、`HIST-003`のそれぞれを期待1位とする意味の異なる、または表現を変えたケースを2件以上ずつ持たなければならない。
+- 各検索品質ケースは、少なくともケースID、検索文、適用する検索条件、期待する1位の`project_id`を持たなければならない。特定の距離スコアを期待値として固定してはならない。
 - `sample-inputs/sample-project-delta.json`は、手動確認でそのまま利用できる自然言語の`prompt`と、その内容を検証するための正規化済み入力項目を持たなければならない。
 - Sample Project Deltaの入力サンプルは、少なくとも次の内容を持たなければならない。
   - 架空の案件名`Sample Project Delta`と案件種別`NEW_BUILD`
@@ -172,16 +180,27 @@ dynamodb-seed/
 - `SearchVectors`自体はEmbeddingモデルを呼び出さず、Toolが事前生成した1,024次元の検索Vectorだけを検索入力として受け取る責務でなければならない。
 - Vector Indexはコサイン距離を使用し、コサイン距離では値が小さいほど類似度が高いことをTool出力とAgentの解釈で一貫させなければならない。
 - 検索はPoC用の単一`search_scope`へ限定し、`entity_type`、`project_type`、`architecture_family`、`outcome_quality`を完全一致filterとして利用できなければならない。
-- Sample Project Deltaの検索では`top_k=3`を使用し、`HIST-001`が検索結果に含まれなければならない。実Embeddingモデルにおける最上位固定は、検索品質評価の基準が確定するまで必須としない。
-- Toolは、案件ID、案件名、検索用サマリー、距離スコア、距離関数を返さなければならない。
+- Sample Project Deltaの検索では`top_k=3`を使用し、実際の`cohere.embed-multilingual-v3`による検索で`HIST-001`が第1位でなければならない。ただし、距離スコアの絶対値はモデル側の変更で変動し得るため、合格条件として固定してはならない。
+- `evaluation/search-quality-cases.json`に定義された全ケースは、実際の`cohere.embed-multilingual-v3`による検索で、各ケースの`expected_top1_project_id`が第1位でなければならない。この評価は3件の架空サンプル案件間で意図した相対順位を識別できることだけを確認するものであり、本番データに対する検索品質、再現率、適合率、または業務上の十分性を証明するものとして扱ってはならない。
+- モデル提供側の出力変化、検索文・サマリーの変更、入力正規化の変更、filterの変更、またはIndex同期状態により期待第1位を満たさなくなった場合、合格条件を`top_k`内へ黙って緩和してはならない。原因を確認し、サンプルデータまたは評価ケースを変更する場合は仕様と差分をレビューしなければならない。
+- Toolは検索単位の不透明な`search_context_id`を返し、各検索結果について不透明な`result_ref`、案件ID、案件名、検索用サマリー、順位、距離スコア、距離関数を返さなければならない。
+- `search_context_id`は、固定された`search_scope`、検索条件のsnapshot、順位付き候補とその`result_ref`、作成時刻、有効期限、および同一見積実行を識別する相関情報に関連付けられなければならない。
+- `search_context_id`と`result_ref`は推測または改ざんによって別の案件へ参照先を変更できない形式でなければならない。`result_ref`は検索結果を後続Toolへ引き継ぐための参照であり、DynamoDBの物理キーまたは案件IDそのものとして扱ってはならない。Agentは検索結果にない案件ID、DynamoDBのpartition key、sort key、または任意の物理キーを後続参照へ指定できてはならない。
+- 検索コンテキストは有限の有効期間を持たなければならない。未知、期限切れ、異なる見積実行、異なる`search_scope`、または検索結果と対応しない`search_context_id`と`result_ref`は後続Toolで拒否し、再検索を要求しなければならない。
 - 距離スコアを見積の信頼度または工数補正係数として利用してはならない。
-- 検索結果0件と、Vector IndexまたはEmbedding経路の利用不能を区別できなければならない。
+- 検索が正常に完了して0件だった場合、Toolはcanonical status `NO_RESULTS`、有効な`search_context_id`、および空の検索結果を返さなければならない。
+- 検索結果が0件でも、必要な標準工数、単価、価格ポリシーが承認済みかつ有効であれば、システムはそれらの標準マスターだけを根拠に見積計算とDraft作成を継続しなければならない。
+- 類似案件0件で作成する回答とDraftには、`similar_projects=[]`、`similar_project_search_status=NO_RESULTS`、`calculation_basis=STANDARD_MASTERS_ONLY`、および「類似案件がなく標準工数・単価・価格マスターだけを根拠にした見積である」旨の注意事項を記録しなければならない。Agentは類似案件または過去実績を補完してはならない。
+- 検索結果0件と、Vector IndexまたはEmbedding経路の利用不能を区別できなければならない。`NO_RESULTS`を検索経路の障害として扱ってはならない。
 - Vector本体をAgent応答または通常のTool結果へ含めてはならない。
 
 ### FR-005: 構造化データ参照
 
-- Estimation Agentは、Vector検索で得た類似案件ID、今回構成に含まれるサービス、および見積基準日を指定して`get_estimation_reference_data`業務Toolを呼び出せなければならない。
+- Estimation Agentは、Vector検索で得た`search_context_id`、選択した0件以上の`result_ref`、今回構成に含まれるサービス、および見積基準日を指定して`get_estimation_reference_data`業務Toolを呼び出せなければならない。検索結果がある場合は少なくとも1件の`result_ref`を指定し、`NO_RESULTS`の場合は空の`result_ref`一覧を指定できなければならない。
+- Toolは、検索コンテキストが存在し有効期限内であること、同一見積実行と固定`search_scope`に属すること、および各`result_ref`がその検索コンテキストの順位付き結果に含まれることを検証しなければならない。検証後の案件IDとDynamoDB物理キーの解決はTool内部だけで行わなければならない。
+- 未知、期限切れ、見積実行不一致、`search_scope`不一致、または検索結果に属さない`search_context_id`と`result_ref`を受け取った場合、Toolは安全側に失敗し、過去案件の構造化データを参照せず、再検索が必要であることを返さなければならない。
 - Toolは、類似案件の正式な実績、差異理由、標準工数、役割別単価、価格ポリシー、および各マスターのversionをDynamoDBから構造化データとして取得しなければならない。
+- Toolは、解決済みの案件IDを構造化結果へ含め、検索結果と正式な実績の対応を検証可能にしなければならない。`NO_RESULTS`の場合は過去案件実績を空で返し、承認済み標準マスターの取得は継続しなければならない。
 - Vector Indexのprojectionは識別子と検索結果表示に必要な属性へ限定し、見積または実績の正式な数値はベーステーブルから再取得しなければならない。
 - Toolは、`APPROVED`かつ`estimate_as_of`に有効なマスターだけを返さなければならない。
 - 必要なマスターが不足、重複、未承認、または期限外の場合、推測または既定値で代替せず、見積計算不能として返さなければならない。
@@ -216,10 +235,13 @@ dynamodb-seed/
 
 ### FR-007: 見積Draftの追加と再参照
 
-- Estimation Agentは、利用者入力、参照したマスターversion、類似案件ID、および冪等キーを指定して`create_estimate_draft`を呼び出せなければならない。
+- Estimation Agentは、利用者入力、参照したマスターversion、`search_context_id`、選択した`result_ref`一覧、および冪等キーを指定して`create_estimate_draft`を呼び出せなければならない。任意の類似案件IDまたはDynamoDB物理キーを保存根拠として直接指定できてはならない。
+- `create_estimate_draft`は保存前に検索コンテキストと`result_ref`を再検証し、期限切れまたは対応不正の場合は保存せず再検索を要求しなければならない。
 - Toolが新規作成できる見積状態は`DRAFT`だけでなければならない。
 - Toolは`estimate_id`、初期version、作成時刻、およびRuntimeで検証済みのactorに対応する作成者識別情報を設定しなければならない。
-- 保存するDraftは、入力snapshot、工数明細、合計工数、役割別工数、原価、提示価格、通貨、参照マスターとversion、類似案件ID、注意事項、および冪等キーを持たなければならない。
+- 保存するDraftは、入力snapshot、工数明細、合計工数、役割別工数、原価、提示価格、通貨、参照マスターとversion、Toolが解決した類似案件ID、`similar_project_search_status`、`calculation_basis`、検索コンテキストの相関情報、注意事項、および冪等キーを持たなければならない。
+- `NO_RESULTS`の検索コンテキストを使用する場合、Draftは類似案件IDを空とし、`similar_project_search_status=NO_RESULTS`、`calculation_basis=STANDARD_MASTERS_ONLY`、および類似案件がない旨の注意事項を持たなければならない。
+- FR-002に従って最初の入力に明示的な保存依頼があり、すべての検証に成功した場合、計算preview後の追加確認を要求せず同一turnで保存しなければならない。
 - 同じ冪等キーによる再試行で、内容が同じ見積Draftを重複作成してはならない。
 - 新規Draftの作成時は条件付き書き込みを使用し、既存Itemを意図せず上書きしてはならない。
 - Toolは既存見積、承認済み見積、マスター、過去案件サマリー、過去案件実績を更新または削除してはならない。
@@ -238,8 +260,9 @@ dynamodb-seed/
   - `create_estimate_draft`
   - `get_estimate_draft`
 - 汎用的な`PutItem`、`UpdateItem`、`DeleteItem`、`Scan`、任意条件の`Query`をAgentへ公開してはならない。
-- Tool入力の文字列長、識別子、日付、数量、単位、サービス、工程、検索条件、`top_k`、冪等キーを検証しなければならない。
-- Tool出力は、Agentが正常、0件、検証エラー、取得不能、保存失敗を区別できるcanonicalな構造化結果でなければならない。
+- Tool入力の文字列長、識別子、日付、数量、単位、サービス、工程、検索条件、`top_k`、`search_context_id`、`result_ref`、冪等キーを検証しなければならない。
+- 構造化参照とDraft保存のTool schemaは、類似案件の任意IDまたはDynamoDB物理キーをAgentから受け取る入力を持ってはならない。
+- Tool出力は、Agentが正常、`NO_RESULTS`、検証エラー、検索コンテキスト不正・期限切れ、取得不能、保存失敗を区別できるcanonicalな構造化結果でなければならない。
 - Estimation専用MCP接続はリクエスト単位で接続、Tool発見、Agent実行、解放を完結し、失敗、タイムアウト、キャンセル時にも接続をリークしてはならない。
 
 ### FR-009: 利用者向け回答と安全な失敗
@@ -254,6 +277,8 @@ dynamodb-seed/
   - 類似案件実績を自動補正へ使用していないこと
   - 使用したマスター識別子とversion
   - 未反映条件と注意事項
+- 類似案件が0件の場合、回答は類似案件がなかったこと、標準工数・単価・価格マスターだけで計算したこと、および類似案件実績を参照していないことを明示しなければならない。
+- 同一turnで保存する場合も、保存成功は保存後の再取得と一致確認が完了した後にだけ回答しなければならない。
 - Vector検索、構造化参照、見積計算、Draft保存、保存後再取得のどの段階で失敗したかを区別しなければならない。
 - Vector検索または構造化参照が利用不能な場合、Agentは取得していない案件、実績、マスター、単価、価格を推測してはならない。
 - Estimation経路が利用不能でも、既存Weather Agent、AWS Knowledge Agent、および一般会話を不要に停止させてはならない。
@@ -292,6 +317,10 @@ dynamodb-seed/
 - シード処理、自動テスト、および手動確認は、値を別々に複製せず、`dynamodb-seed/`の同じサンプルデータを使用しなければならない。
 - 自動テストは実Amazon Bedrockを呼び出さず、Bedrock Runtime `InvokeModel`のテストダブルを使用して、model ID、`input_type`、`embedding_types`、`truncate`、入力、応答Vectorの型と1,024次元を検証しなければならない。
 - Unitまたはintegration testでは、決定的なVectorまたは`SearchVectors`応答を使用し、順位、filter、コサイン距離の方向、0件、利用不能を検証しなければならない。
+- 自動テストは`evaluation/search-quality-cases.json`を読み取り、検索ケースが6件以上あり、`HIST-001`、`HIST-002`、`HIST-003`を期待第1位とするケースがそれぞれ2件以上あること、および必須属性を検証しなければならない。
+- 自動テストは、`search_context_id`と`result_ref`の正常な引き継ぎ、未知・期限切れ・見積実行不一致・`search_scope`不一致・結果不一致の拒否、および`NO_RESULTS`コンテキストで空の`result_ref`一覧を受け付けることを決定的に検証しなければならない。
+- 自動テストは、最初の入力に保存依頼が明示された場合の同一turn保存、保存意思がない場合と曖昧な場合のpreviewのみの応答、保存前検証失敗時の非保存、および0件検索時の標準マスターだけによる保存を検証しなければならない。
+- 実Amazon Bedrockを使用する検索品質E2Eを明示的な許可のもとで実施する場合、`evaluation/search-quality-cases.json`の全ケースで期待案件が第1位になることを検証しなければならない。距離スコアの絶対値は合格条件にしてはならない。
 - CDKテストでは、DynamoDBテーブル、Vector Index、Gateway、Target、Runtime設定、Embedding経路、およびIAM境界を生成テンプレートから検証できなければならない。
 - 既存のManager、Weather、AWS Knowledge、Runtime HTTP／SSE、Memory、およびコンテナテストを維持しなければならない。
 - AWSへのデプロイ、シード、およびRuntime E2Eは、ユーザーが明示的に依頼した場合だけ実施しなければならない。
@@ -305,11 +334,15 @@ dynamodb-seed/
   - `cohere.embed-multilingual-v3`が`us-east-1`で利用可能であり、Estimation Tool実行ロールだけが対象モデルを呼び出せることの確認方法
   - Vector Indexが利用可能な状態であり、シード済みサマリーが検索可能になったことの判定方法
   - `dynamodb-seed/sample-inputs/sample-project-delta.json`の`prompt`を使用して、見積Draftの作成と保存を依頼するRuntime呼び出し手順
-  - Vector検索結果に`HIST-001`が含まれること、FR-006の工数・原価・提示価格、参照version、注意事項、および保存IDを確認する期待結果
+  - Vector検索結果で`HIST-001`が第1位になること、FR-006の工数・原価・提示価格、参照version、注意事項、および保存IDを確認する期待結果
+  - 最初の入力に明示された保存依頼に従い、計算preview後の追加確認なしに同一turnで保存され、保存後の再取得が完了していることの確認方法
+  - 検索結果から発行された`search_context_id`と`result_ref`を後続の構造化参照と保存に使用し、Agentが任意の案件IDまたはDynamoDB物理キーを指定していないことを、秘密情報や物理キーを表示せずに確認する方法
   - シード済みサマリーがEmbedding provider `COHERE`、モデルID`cohere.embed-multilingual-v3`、入力種別`search_document`、1,024次元として登録されていることをVector本体を表示せずに確認する方法
   - 応答で得た既知の`project_id`、`estimate_id`、versionを用いてDynamoDBから保存Draftを再取得し、回答との一致を確認する手順
   - 同一冪等キー相当の再試行でDraftが重複作成されないことを確認する手順、または実行経路上で同じ性質を確認できる代替手順
-  - Vector検索0件、必要マスター不足、保存失敗などの異常系を実施する場合の安全な実施条件と期待結果
+  - `evaluation/search-quality-cases.json`の各検索文について、期待案件が第1位になることを確認する方法、およびこの確認が3件の架空サンプル案件間の相対順位評価に限られるという注意
+  - Vector検索0件を安全に再現し、標準マスターだけで計算を継続し、類似案件一覧が空、`similar_project_search_status=NO_RESULTS`、`calculation_basis=STANDARD_MASTERS_ONLY`、および類似案件がない旨の注意事項が回答とDraftに記録されることを確認する方法
+  - 未知または期限切れの検索コンテキスト、不正な`result_ref`、必要マスター不足、保存失敗などの異常系を実施する場合の安全な実施条件と期待結果
   - Vector本体、実account ID、ARN、Gateway URL、テーブル名、Index ARN、認証情報、内部例外、スタックトレースが利用者向け応答に露出していないことの確認方法
   - 作成したテスト用Draftの扱い、および必要な場合の安全なクリーンアップ方針
 - 手動確認手順は、AWSリソース識別子を可能な限りCloudFormation outputまたはAWS APIから解決し、利用者がARN、Gateway URL、テーブル名、Index名を文書へ実値で転記することを必須としてはならない。
@@ -325,6 +358,8 @@ dynamodb-seed/
 - Embeddingモデルへ渡すテキストは、架空の検索用サマリーと検索文だけにデータ最小化し、実在する顧客データ、個人情報、秘密情報、見積金額、社内単価を含めてはならない。
 - DynamoDB Vector Searchのfilterをテナント境界または認可境界として扱ってはならない。
 - PoCは単一の架空`search_scope`へ限定し、本番の顧客分離を検証済みとして扱ってはならない。
+- `search_context_id`と`result_ref`は認証または認可の代替ではなく、検証済みactor、同一見積実行、および固定`search_scope`の範囲を越えた参照を許可してはならない。
+- Agentから任意の案件IDまたはDynamoDB物理キーを受け取り、検索結果の検証を迂回して構造化参照または保存を行ってはならない。
 - ログ、Tool結果、Agent応答にVector本体、AWS認証情報、Authorization header、内部例外、スタックトレース、テーブル名、Index ARN、IAM ARNを含めてはならない。
 - 運用ログへ見積入力全文、単価、個人情報、秘密情報を不要に記録してはならない。
 
@@ -335,6 +370,8 @@ dynamodb-seed/
 - Vector Indexの非同期反映を考慮し、書き込み直後の検索結果を強整合として扱ってはならない。
 - Amazon Bedrockのタイムアウト、throttling、アクセス拒否、モデル利用不能、応答不正をVector検索不能として区別し、別モデルまたは推測値へfallbackしてはならない。
 - 検索結果0件、検索不能、参照不能、検証エラー、保存失敗、再取得失敗を区別できなければならない。
+- 検索コンテキストは有限の有効期間を持ち、後続の参照時と保存時に有効性、相関、`search_scope`、および`result_ref`との対応を再検証しなければならない。
+- 正常な検索結果0件を障害として扱わず、承認済み標準マスターだけで継続した事実を回答とDraftで追跡可能にしなければならない。
 - AgentまたはToolの障害時に、取得していない根拠または保存していないIDを生成してはならない。
 
 ### 性能と利用量制御
@@ -368,18 +405,22 @@ dynamodb-seed/
 - `dynamodb-seed/`にFR-003で定義したREADME、過去案件、マスター、および利用者入力の成果物が存在し、すべてリポジトリでレビュー可能である。
 - `dynamodb-seed/`の全JSONをUTF-8 JSONとして解析でき、必須属性、型、識別子の一意性、およびデータ間の参照整合性を自動テストで確認できる。
 - `sample-inputs/sample-project-delta.json`に自然言語の`prompt`と正規化済み入力があり、案件構成、作業範囲、前提、対象外、基準日、保存意思がFR-003の内容と一致する。
+- `evaluation/search-quality-cases.json`に6件以上の日本語検索ケースがあり、`HIST-001`、`HIST-002`、`HIST-003`のそれぞれを期待第1位とするケースが2件以上ずつ存在し、ケースID、検索文、検索条件、期待第1位の案件IDを検証できる。
 - `HIST-001`、`HIST-002`、`HIST-003`のサマリーと正式な実績、および承認済みの標準工数、単価、価格ポリシーを再現可能に登録できる。
 - `dynamodb-seed/`の正本JSONにVector本体が含まれず、シード処理がAmazon Bedrockの`cohere.embed-multilingual-v3`、`input_type=search_document`、1,024次元を使用して案件サマリーからEmbeddingを生成し、DynamoDBへ登録することを確認できる。
 - 過去案件サマリーだけがVector属性を持ち、保存Vectorと検索Vectorに同じモデルID`cohere.embed-multilingual-v3`、1,024次元、入力正規化規則を使用し、保存時は`search_document`、検索時は`search_query`を使用することを確認できる。
 - `cohere.embed-multilingual-v3`以外のモデルID、用途と異なる`input_type`、または1,024以外の次元数を設定した場合、シード処理と検索Toolが起動時または呼び出し前に安全に失敗することを確認できる。
 - 決定的なテストで、`search_scope`とfilterが適用され、コサイン距離の小さい順に候補が扱われることを確認できる。
-- AWS E2Eを実施した場合、Sample Project Deltaの`top_k=3`に`HIST-001`が含まれることを確認できる。
-- 検索結果0件と、EmbeddingまたはVector Indexの利用不能が異なる結果として扱われることを確認できる。
+- AWS E2Eを実施した場合、Sample Project Deltaの`top_k=3`で`HIST-001`が第1位になり、`evaluation/search-quality-cases.json`の全ケースで`expected_top1_project_id`が第1位になることを確認できる。距離スコアの絶対値は固定せず、この結果を3件の架空サンプル案件を越える本番検索品質の証明として扱わない。
+- 検索結果0件では、canonical status `NO_RESULTS`、有効な`search_context_id`、空の結果一覧が返り、EmbeddingまたはVector Indexの利用不能とは異なる結果として扱われることを確認できる。
+- Vector検索結果に`search_context_id`と各候補の不透明な`result_ref`が含まれ、DynamoDB物理キーとVector本体が含まれないことを確認できる。
 - Tool結果および利用者向け回答にVector本体が含まれないことを確認できる。
 
 ### AC-003: 構造化参照と見積計算
 
-- Vector検索で得た`HIST-001`から、過去見積25.0人日、実績26.0人日、工期60営業日、役割別実績、差異理由をベーステーブルから取得できる。
+- Vector検索で得た`search_context_id`と`HIST-001`に対応する`result_ref`から、過去見積25.0人日、実績26.0人日、工期60営業日、役割別実績、差異理由をベーステーブルから取得できる。
+- 未知、期限切れ、見積実行不一致、`search_scope`不一致、または検索結果に属さない`search_context_id`と`result_ref`では、過去案件の構造化データを取得できず再検索を要求することを確認できる。
+- `NO_RESULTS`の検索コンテキストと空の`result_ref`一覧では、過去案件実績を取得せず、承認済み標準マスターを取得して見積計算を継続できる。
 - `APPROVED`かつ2026-08-19に有効なマスターだけがSample Project Deltaの計算へ使用されることを確認できる。
 - マスター不足、重複、未承認、期限外の各ケースで、Toolが推測せず見積計算不能を返すことを確認できる。
 - Sample Project Deltaの工数明細合計が15.7人日、AWSアーキテクトが5.0人日、インフラエンジニアが10.7人日になることを自動テストで確認できる。
@@ -389,8 +430,11 @@ dynamodb-seed/
 
 ### AC-004: Draft追加、冪等性、再参照
 
-- 保存を明示しない入力で見積Draftが追加されないことを確認できる。
-- 保存を明示したSample Project Deltaについて、状態`DRAFT`、初期version、計算明細、合計、原価、提示価格、参照マスター、類似案件、注意事項を持つItemが条件付きで追加される。
+- 保存を明示しない入力または保存意思が曖昧な入力では計算previewだけが返り、見積Draftが追加されないことを確認できる。
+- 保存を最初の入力で明示したSample Project Deltaについて、追加確認なしに同一turnで、状態`DRAFT`、初期version、計算明細、合計、原価、提示価格、参照マスター、Toolが解決した類似案件、検索コンテキストの相関情報、注意事項を持つItemが条件付きで追加される。
+- 最初の入力に保存依頼があっても、入力不足、必要マスターの不正、計算検証エラー、または保存前検証失敗ではDraftが追加されないことを確認できる。
+- 正常な類似案件0件と明示的な保存依頼の組み合わせでは同一turnでDraftが追加され、類似案件IDが空、`similar_project_search_status=NO_RESULTS`、`calculation_basis=STANDARD_MASTERS_ONLY`、および類似案件がない旨の注意事項を持つことを確認できる。
+- 検索コンテキストが保存前に期限切れまたは不正になった場合、Draftが追加されず再検索を要求することを確認できる。
 - 同じ冪等キーと同じ内容を再試行しても、新しいDraftが重複作成されないことを確認できる。
 - 既存キーとの衝突、内容が異なる冪等キー再利用、DynamoDB書き込み失敗を安全に扱い、既存Itemを上書きしないことを確認できる。
 - 保存後に既知の`project_id`、`estimate_id`、versionでDraftを再取得し、保存した内容と一致することを確認できる。
@@ -410,8 +454,9 @@ dynamodb-seed/
 
 ### AC-006: 障害、安全性、および回帰
 
-- 入力不足、入力上限超過、Amazon Bedrockのタイムアウト・throttling・アクセス拒否・モデル利用不能・応答不正、Vector検索0件、Vector検索障害、マスター不足、計算検証エラー、条件付き書き込み失敗、再取得失敗をテストダブルで再現できる。
+- 入力不足、入力上限超過、Amazon Bedrockのタイムアウト・throttling・アクセス拒否・モデル利用不能・応答不正、Vector検索0件、Vector検索障害、未知・期限切れ・見積実行不一致・`search_scope`不一致・結果不一致の検索参照、マスター不足、計算検証エラー、条件付き書き込み失敗、再取得失敗をテストダブルで再現できる。
 - 各障害で、取得していない過去案件、実績、単価、価格、保存IDをAgentが推測しないことを確認できる。
+- 正常なVector検索0件では架空の類似案件を生成せず、障害として停止せず、承認済み標準マスターだけで見積を継続することを確認できる。
 - 利用者向け応答および運用ログに、Vector本体、内部例外、スタックトレース、テーブル名、Index ARN、IAM ARN、認証情報が含まれないことを確認できる。
 - Estimation MCP接続が正常、失敗、タイムアウト、キャンセルの各経路でリークしないことを確認できる。
 - 既存のManager、Weather、AWS Knowledge、Runtime HTTP／SSE、Memory、およびコンテナの自動テストが成功する。
@@ -432,6 +477,9 @@ dynamodb-seed/
 - 手動確認手順が`dynamodb-seed/sample-inputs/sample-project-delta.json`の`prompt`を入力の正本として参照し、手順とサンプルファイルの内容が重複管理されていない。
 - 手順だけを読んだ確認者が、許可されたAWS環境の確認、必要リソースとシードの準備確認、Runtime呼び出し、期待値判定、DynamoDBからのDraft再取得、冪等性確認、安全性確認を順に実施できる。
 - 手動確認の期待結果に、`HIST-001`、15.7人日、役割別工数、1,356,000円、1,695,000円、マスターversion、保存ID、類似実績を自動補正していないこと、および未反映条件が明記されている。
+- 手動確認の期待結果に、Sample Project Deltaで`HIST-001`が第1位になること、明示的な保存依頼では追加確認なしに同一turnで保存されること、および保存後再取得が完了していることが明記されている。
+- 手動確認で、検索結果から発行された`search_context_id`と`result_ref`による安全な引き継ぎ、検索結果0件での標準マスターだけによる継続、ならびに不正または期限切れ参照の拒否を確認できる。
+- 検索品質の手動確認が`evaluation/search-quality-cases.json`を正本として使用し、3件の架空サンプル案件間の相対順位評価に限定される注意を明記している。
 - 手動確認手順が、実account ID、ARN、Gateway URL、テーブル名、Index名、認証情報を文書へ固定値として記載することを要求しない。
 - README、Agentドキュメント、CDKドキュメント、手動テストガイド、本仕様書、実装、テスト、および必要なADRの間に矛盾がない。
 
@@ -446,6 +494,8 @@ dynamodb-seed/
 - OpenAI Embeddings APIを直接利用せず、OpenAI API keyまたはEmbedding用の外部HTTPS通信経路を追加しない。
 - Agentの文章生成には既存どおりAmazon Bedrock上の`openai.gpt-5.5`を使用し、本featureのEmbedding生成モデルとして再利用してはならない。
 - Vectorの次元数は4,096以下、`SearchVectors`の`TopK`は100以下とし、本ユースケースでは`top_k=3`を使用する。
+- Sample Project Deltaで`HIST-001`を第1位とする要件、および検索品質ケースの期待第1位は、3件の架空サンプル案件と固定された評価入力に対するPoCの回帰基準である。距離スコアの絶対値を固定せず、本番データに対する検索品質保証として使用しない。
+- Vector検索結果から構造化参照とDraft保存へ案件を引き継ぐ場合は、有限の有効期間を持つ`search_context_id`と不透明な`result_ref`だけを使用し、Agentから任意の案件IDまたはDynamoDB物理キーを受け付けない。
 - Vector Indexの構成は作成後に変更できない前提とし、Embedding次元数、距離関数、projection、filter属性、partition keyの変更には新しいIndexが必要であることを考慮する。
 - Vector Indexの反映は非同期かつ結果整合であり、ベーステーブルの書き込み直後に必ず検索可能になるとは扱わない。
 - Vector検索で取得できる属性はIndexのprojectionへ含まれるものに限定し、正式な数値はベーステーブルから再取得する。
@@ -500,24 +550,22 @@ dynamodb-seed/
 
 ## 未確定事項 / 要確認事項
 
-次の要件レベルの事項は、`specs.md`のレビューで確認する必要がある。
+現時点で要件レベルの未確定事項はない。
 
-- 類似案件が0件の場合に、標準工数だけでDraft作成を継続するか、利用者確認で停止するか
-- 明示的な保存依頼が最初の入力に含まれる場合に同一turnで保存するか、計算preview後に再確認するか
-- Sample Project Deltaの実Embedding検索で、`HIST-001`を`top_k`内だけでなく最上位必須とするか、および検索品質評価に使用する質問セット
-- Vector検索結果の案件IDを後続の構造化参照へ安全に引き継ぐ契約
-
-次の内容は本仕様の機能要求を変更しない実装・運用詳細として、上記要件レベルの事項を承認した後に`plan.md`で決定する。
+次の内容は本仕様の機能要求を変更しない実装・運用詳細として、本仕様のレビューと承認後に`plan.md`で決定する。
 
 - PoCで単一Table案を採用するか、データ分類ごとにTableを分割するか、および具体的な物理キー設計
 - シード用Embeddingをデプロイ前のローカル工程でAmazon Bedrockから生成するか、デプロイ後のシード処理で生成するか。ただし、いずれの場合も生成したVector本体は`dynamodb-seed/`の正本へ含めない。
 - DynamoDBテーブル、Vector Index、およびシード処理をCDKで管理する具体的な範囲
 - Estimation Gateway Targetを一つの実行単位へ集約するか、読み取りと書き込みで分割するか
 - `search_scope`をTool側で固定してAgent入力から除外するか、allowlist検証済み入力として受け取るか
+- 検索コンテキストの物理的な保存先、`search_context_id`と`result_ref`の生成方式、有効期間、見積実行との相関方法、および期限切れデータのクリーンアップ方式
+- 自然言語から明示的、未指定、曖昧の保存意思を判定し、Tool呼び出しへ引き継ぐ具体方式
 - Gateway、Target、テーブル、Index、シード処理、およびRuntime設定の具体的な名前
 - Estimation専用MCPクライアントの設定、タイムアウト、再試行、Tool allowlist、結果検証、cleanupの具体方式
 - Tool入力の文字数、数量、`top_k`、結果件数、および結果サイズの具体的な上限
 - Draftの冪等キー生成、保存条件式、初期version、作成者識別、およびItemサイズ検査の具体方式
 - シード、Vector Index準備、AWS E2E、異常系、およびクリーンアップに使用する具体的なコマンド
+- `evaluation/search-quality-cases.json`を使用する実Embedding検索品質E2Eの実行コマンド、結果記録、およびモデル側変更時の再評価手順
 - 自動テストで使用するModel、MCP、Embedding、DynamoDB、`SearchVectors`のテストダブル
 - Embeddingモデルと生成経路はADR-0007に記録済みとし、新しいAgent、Gateway、DynamoDBデータ配置、および書き込み権限に関する追加の設計判断をADRへ記録する範囲
