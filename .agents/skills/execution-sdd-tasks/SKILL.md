@@ -83,6 +83,39 @@ specs/001-requirement
 
 完了マークはまとめて更新せず、各タスクの完了条件を満たした時点で直ちに更新する。
 
+## Docker／コンテナタスクの実行前確認
+
+`docker: command not found`だけを根拠に、Docker／Linux container／ARM64 buildタスクを実行不能と判定しない。
+Codex DesktopやIDEから起動したshellは、利用者の対話的Terminalと`PATH`、shell初期化、Docker context、
+socket環境が異なる場合がある。次の順で利用可能なengineとCLIを確認する。
+
+1. 現在のshellで`command -v docker`と`docker version`を別々に実行する。
+2. macOSでは、利用者の対話的zsh設定を反映するため、`/bin/zsh -lic 'type -a docker'`と
+   `/bin/zsh -lic 'docker version'`を確認する。必要なら`/bin/zsh -lic 'print -r -- $PATH'`で
+   現在の実行環境との差を確認する。
+3. `pgrep -fil`または`ps -axo pid=,command=`と`rg -i`を使い、少なくとも
+   `Rancher Desktop`、`rancher-desktop`、`Podman Desktop`、`podman`、`gvproxy`、`lima`、`qemu`の
+   関連processが動作していないか確認する。
+4. Rancher Desktopのprocessがある場合は、`~/.rd/bin/docker`と
+   `/Applications/Rancher Desktop.app/Contents/Resources/`配下の実行可能な`docker`を確認する。
+   CLIが見つかった場合は絶対pathで`version`を実行し、そのCLIを後続buildに使用する。
+5. Podman Desktopのprocessがある場合は、対話的shellの`podman`、`/opt/podman/bin/podman`、
+   `/usr/local/bin/podman`を確認し、`podman machine list`、`podman system connection list`、
+   `podman info`でmachineとsocketの状態を確認する。Docker CLIがある場合は、既存のPodman向け
+   Docker contextまたは互換socketを明示して`docker version`を確認する。仕様とタスクが許せば、
+   Docker互換の`podman build`／`podman run`で同じplatformと契約を検証してよいが、使用engineを記録する。
+6. Docker CLIが見つかった場合は`docker context ls`を確認し、current contextだけで接続できないときは
+   `docker --context <既存context名> version`を試す。利用者のcurrent contextを無断で変更しない。
+7. socketアクセス拒否、sandbox制約、Desktop appのfilesystem参照拒否などが発生した場合は、
+   認証情報や設定を書き換えず、同じread-only確認または必要なbuild／runを承認付き実行で再試行する。
+8. process、対話的shell、既知CLI配置、context、socket、権限制約を確認しても利用できない場合だけ、
+   実行した確認と結果を`- 未実施理由:`へ具体的に記録する。
+
+Rancher DesktopまたはPodman Desktopの関連processが存在する場合は、CLIやsocketを追加調査せずに
+「実行環境に`docker`コマンドが存在しない」と結論しない。既存のDesktop設定、context、socketを尊重し、
+アプリケーションの起動・停止、context変更、machine作成など利用者状態を変更する操作は、タスクの範囲と
+必要性を確認してから行う。
+
 ## 実行できないタスクの扱い
 
 タスクを完了できない場合は、チェックボックスを `[ ]` のまま保持し、タスクブロックの最後の行に
@@ -164,6 +197,8 @@ specs/001-requirement
 - 完了したタスクから `- 未実施理由:` を削除したか。
 - 未完了タスクの最後に、具体的で最新の `- 未実施理由:` が記録されているか。
 - 実施したテストと検証結果を確認したか。
+- Docker／コンテナタスクを実行不能とした場合、対話的shell、Rancher Desktop／Podman Desktopのprocess、
+  既知CLI配置、context／socket、sandbox権限まで確認したか。
 - `## 次回以降に実施すべきタスク` に重複や現在タスクの付け替えがないか。
 - 差分が承認済み仕様と計画の範囲に収まっているか。
 - README、docs、ADR、実装、テスト、`tasks.md` の間に矛盾がないか。

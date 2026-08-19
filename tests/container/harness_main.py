@@ -3,19 +3,29 @@
 import os
 from typing import Any
 
-from agent_app.config import AppConfig
+from agent_app.config import AppConfig, GatewayConfig
 from agent_app.runtime import create_runtime_app
 
 
 HARNESS_CONFIG = AppConfig(
-    aws_region="us-east-2",
+    aws_region="us-east-1",
     model_id="openai.gpt-5.5",
     memory_id="test-memory",
     tracing_disabled="1",
-    gateway_url=(
-        "https://test-gateway.gateway.bedrock-agentcore.us-east-2.amazonaws.com/mcp"
+    weather_gateway=GatewayConfig(
+        url=(
+            "https://test-gateway.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
+        ),
+        region="us-east-1",
+        target_name="WeatherTimeMock",
     ),
-    gateway_target_name="WeatherTimeMock",
+    knowledge_gateway=GatewayConfig(
+        url=(
+            "https://test-knowledge.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
+        ),
+        region="us-east-1",
+        target_name="KnowledgeRetrieve",
+    ),
 )
 HARNESS_MODEL = object()
 HARNESS_SESSION = object()
@@ -38,7 +48,8 @@ def create_harness_app():
         model,
         prompt,
         session,
-        mcp_server_factory,
+        weather_mcp_server_factory,
+        knowledge_mcp_server_factory,
         agent_factory,
     ):
         # 実モデルやAWSを使わず、コンテナ内で正常・異常SSEだけを再現する。
@@ -46,7 +57,8 @@ def create_harness_app():
         assert model is HARNESS_MODEL
         assert prompt
         assert session is HARNESS_SESSION
-        assert mcp_server_factory is _unexpected_external_dependency
+        assert weather_mcp_server_factory is _unexpected_external_dependency
+        assert knowledge_mcp_server_factory is _unexpected_external_dependency
         assert agent_factory is _unexpected_external_dependency
         yield {"type": "text_delta", "delta": "container"}
         if mode == "error":
@@ -60,7 +72,8 @@ def create_harness_app():
         config=HARNESS_CONFIG,
         model=HARNESS_MODEL,
         agent_factory=_unexpected_external_dependency,
-        mcp_server_factory=_unexpected_external_dependency,
+        weather_mcp_server_factory=_unexpected_external_dependency,
+        knowledge_mcp_server_factory=_unexpected_external_dependency,
         session_factory=lambda config, invocation: HARNESS_SESSION,
         stream_service=stream_service,
     )

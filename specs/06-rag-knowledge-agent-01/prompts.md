@@ -29,3 +29,37 @@ projects/
 
 skillのcreate-sdd-specを使って、`specs/06-rag-knowledge-agent-01/specs.md`を作成してください。
 また、ADRを作成する場合、skillの`create-adr`を使ってください。
+
+
+# for plan.md
+
+specs.mdを作成しました。これをもとに、
+skillのcreate-sdd-planを使って、`specs/06-rag-knowledge-agent-01/plan.md`を作成してください。
+また、ADRを作成する場合、skillの`create-adr`を使ってください。
+
+
+# for tasks.md
+
+plan.mdを作成しました。これをもとに、
+skillのcreate-sdd-tasksを使って、`specs/06-rag-knowledge-agent-01/tasks.md`を作成してください。
+また、ADRを作成する場合、skillの`create-adr`を使ってください。
+
+
+# for executing tasks
+
+tasks.mdが完成したので、skillのexecution-sdd-tasksを使って、specs/06-rag-knowledge-agent-01/tasks.mdのタスクを実行し、完了してください。
+specs/06-rag-knowledge-agent-01/specs.md、 specs/06-rag-knowledge-agent-01/plan.md、 `docs/ADR/`のADR を参照し、 
+すべてのコンテキストを考慮してタスクリスト内のタスクを実装してください。 
+
+タスクを順番に完了することに集中してください。 
+タスクが完了したら、[x] を使用して完了マークを付けてください。 
+各ステップが完了したら、タスクリストのマークとタスクの完了マーク [x] を更新することが非常に重要です。
+実行が不可能なタスクの場合は、タスクの最後の行に`- 未実施理由:`を追加し、未実施の理由を記載してください。
+
+あなたは、AI AgentやAWSの超優秀なエンジニアです。プロフェッショナルな視点で実装してください。
+
+
+## ２度目以降のtasks.mdの実行
+
+tasks.mdに完了マークがついてないタスクがあります。skillのexecution-sdd-tasksを使って、続けてタスクを実行してください。
+タスクを順番に完了することに集中してください。

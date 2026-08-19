@@ -7,8 +7,8 @@
 - Supersedes: N/A
 - Superseded by: N/A
 - Related specs: `specs/06-rag-knowledge-agent-01/specs.md`
-- Related plan: N/A
-- Related tasks: N/A
+- Related plan: `specs/06-rag-knowledge-agent-01/plan.md`
+- Related tasks: `specs/06-rag-knowledge-agent-01/tasks.md`
 
 ## 1. 背景
 
@@ -209,6 +209,8 @@ CDKでS3バケットだけを作成し、MarkdownとmetadataはS3コンソール
 - `specs/06-rag-knowledge-agent-01/discuss.md`
 - `specs/06-rag-knowledge-agent-01/spec-draft.md`
 - `specs/06-rag-knowledge-agent-01/specs.md`
+- `specs/06-rag-knowledge-agent-01/plan.md`
+- `specs/06-rag-knowledge-agent-01/tasks.md`
 - `knowledge-base-s3/`
 - [Amazon Bedrock Managed Knowledge Base: Amazon S3](https://docs.aws.amazon.com/bedrock/latest/userguide/kb-managed-ds-s3.html)
 - [Include metadata in a data source](https://docs.aws.amazon.com/bedrock/latest/userguide/kb-metadata.html)

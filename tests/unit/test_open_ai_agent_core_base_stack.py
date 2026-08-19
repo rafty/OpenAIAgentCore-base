@@ -12,7 +12,7 @@ def _stack(app: cdk.App) -> AgentCoreStack:
     return AgentCoreStack(
         app,
         "OpenAiAgentCoreBaseStack",
-        env=cdk.Environment(region="us-east-2"),
+        env=cdk.Environment(region="us-east-1"),
     )
 
 
@@ -42,8 +42,8 @@ def test_agentcore_resources_and_properties(tmp_path) -> None:
     endpoints = [r for r in resources.values() if r["Type"] == "AWS::BedrockAgentCore::RuntimeEndpoint"]
     assert len(memories) == 1
     assert len(runtime_entries) == 1
-    assert len(gateway_entries) == 1
-    assert len(target_entries) == 1
+    assert len(gateway_entries) == 2
+    assert len(target_entries) == 2
     assert endpoints == []
 
     memory = memories[0]
@@ -54,8 +54,18 @@ def test_agentcore_resources_and_properties(tmp_path) -> None:
     assert memory["UpdateReplacePolicy"] == "Delete"
 
     _, runtime_resource = runtime_entries[0]
-    gateway_logical_id, gateway_resource = gateway_entries[0]
-    target_logical_id, _ = target_entries[0]
+    gateways_by_name = {
+        resource["Properties"]["Name"]: (logical_id, resource)
+        for logical_id, resource in gateway_entries
+    }
+    weather_gateway_id, weather_gateway = gateways_by_name["OpenAiWeatherGateway"]
+    knowledge_gateway_id, knowledge_gateway = gateways_by_name["OpenAiKnowledgeGateway"]
+    targets_by_name = {
+        resource["Properties"]["Name"]: logical_id
+        for logical_id, resource in target_entries
+    }
+    weather_target_id = targets_by_name["WeatherTimeMock"]
+    knowledge_target_id = targets_by_name["KnowledgeRetrieve"]
     runtime = runtime_resource["Properties"]
     assert runtime["ProtocolConfiguration"] == "HTTP"
     assert runtime["NetworkConfiguration"] == {"NetworkMode": "PUBLIC"}
@@ -64,20 +74,27 @@ def test_agentcore_resources_and_properties(tmp_path) -> None:
     assert "TracingConfiguration" not in runtime
     environment = runtime["EnvironmentVariables"]
     assert environment == {
-        "AWS_REGION": "us-east-2",
+        "AWS_REGION": "us-east-1",
         "BEDROCK_OPENAI_MODEL_ID": "openai.gpt-5.5",
         "OPENAI_AGENTS_DISABLE_TRACING": "1",
         "AGENTCORE_MEMORY_ID": environment["AGENTCORE_MEMORY_ID"],
         "AGENTCORE_GATEWAY_URL": {
-            "Fn::GetAtt": [gateway_logical_id, "GatewayUrl"],
+            "Fn::GetAtt": [weather_gateway_id, "GatewayUrl"],
         },
         "AGENTCORE_GATEWAY_TARGET_NAME": "WeatherTimeMock",
+        "AGENTCORE_KNOWLEDGE_GATEWAY_URL": {
+            "Fn::GetAtt": [knowledge_gateway_id, "GatewayUrl"],
+        },
+        "AGENTCORE_KNOWLEDGE_GATEWAY_TARGET_NAME": "KnowledgeRetrieve",
     }
     assert "Fn::GetAtt" in environment["AGENTCORE_MEMORY_ID"]
 
     # URL文字列ではなく同一Gatewayのtokenを照合し、別Gatewayへの誤配線を検出する。
-    assert runtime_resource["DependsOn"][-1] == target_logical_id
-    assert gateway_resource["Properties"]["Name"] == "OpenAiWeatherGateway"
+    assert {weather_target_id, knowledge_target_id}.issubset(
+        set(runtime_resource["DependsOn"])
+    )
+    assert weather_gateway["Properties"]["Name"] == "OpenAiWeatherGateway"
+    assert knowledge_gateway["Properties"]["Name"] == "OpenAiKnowledgeGateway"
 
     runtime_role_logical_id = runtime["RoleArn"]["Fn::GetAtt"][0]
     runtime_policies = [
@@ -97,9 +114,49 @@ def test_agentcore_resources_and_properties(tmp_path) -> None:
         {
             "Action": "bedrock-agentcore:InvokeGateway",
             "Effect": "Allow",
-            "Resource": {"Fn::GetAtt": [gateway_logical_id, "GatewayArn"]},
-        }
+            "Resource": {"Fn::GetAtt": [weather_gateway_id, "GatewayArn"]},
+        },
+        {
+            "Action": "bedrock-agentcore:InvokeGateway",
+            "Effect": "Allow",
+            "Resource": {"Fn::GetAtt": [knowledge_gateway_id, "GatewayArn"]},
+        },
     ]
+
+    # RuntimeはGatewayだけを呼び、Knowledge Baseと文書bucketへ直接到達しない。
+    runtime_actions = {
+        action
+        for statement in statements
+        for action in (
+            statement["Action"]
+            if isinstance(statement["Action"], list)
+            else [statement["Action"]]
+        )
+    }
+    assert "bedrock:GetKnowledgeBase" not in runtime_actions
+    assert "bedrock:Retrieve" not in runtime_actions
+    assert not any(action.startswith("s3:") for action in runtime_actions)
+
+    knowledge_base_id = next(
+        logical_id
+        for logical_id, resource in resources.items()
+        if resource["Type"] == "AWS::Bedrock::KnowledgeBase"
+    )
+    data_source_id = next(
+        logical_id
+        for logical_id, resource in resources.items()
+        if resource["Type"] == "AWS::Bedrock::DataSource"
+    )
+    assert rendered["Outputs"] == {
+        "KnowledgeBaseId": {
+            "Description": "Initial ingestion用Managed Knowledge Base ID",
+            "Value": {"Fn::GetAtt": [knowledge_base_id, "KnowledgeBaseId"]},
+        },
+        "KnowledgeDataSourceId": {
+            "Description": "Initial ingestion用Data Source ID",
+            "Value": {"Fn::GetAtt": [data_source_id, "DataSourceId"]},
+        },
+    }
 
     # 管理policy、Memory操作権限、秘密情報の非混入をテンプレート全体で確認する。
     serialized = json.dumps(rendered)
@@ -110,7 +167,7 @@ def test_agentcore_resources_and_properties(tmp_path) -> None:
     assert "AWS_ACCESS_KEY_ID" not in serialized
     assert "AWS_SECRET_ACCESS_KEY" not in serialized
     assert "DEBUG" not in serialized
-    assert stack.region == "us-east-2"
+    assert stack.region == "us-east-1"
 
     # CloudFormation本体には出ないDocker build platformをasset manifestで確認する。
     app.synth()

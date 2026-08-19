@@ -7,8 +7,8 @@
 - Supersedes: N/A
 - Superseded by: N/A
 - Related specs: `specs/06-rag-knowledge-agent-01/specs.md`
-- Related plan: N/A
-- Related tasks: N/A
+- Related plan: `specs/06-rag-knowledge-agent-01/plan.md`
+- Related tasks: `specs/06-rag-knowledge-agent-01/tasks.md`
 
 ## 1. 背景
 
@@ -249,6 +249,8 @@ Weather専用Gatewayの既存境界を維持し、Knowledge経路を独立して
 - `specs/06-rag-knowledge-agent-01/discuss.md`
 - `specs/06-rag-knowledge-agent-01/spec-draft.md`
 - `specs/06-rag-knowledge-agent-01/specs.md`
+- `specs/06-rag-knowledge-agent-01/plan.md`
+- `specs/06-rag-knowledge-agent-01/tasks.md`
 - `docs/ADR/adr-0002-use-agents-as-tools.md`
 - `docs/ADR/adr-0003-use-dedicated-agentcore-gateway-for-weather-tools.md`
 - [Amazon Bedrock Managed Knowledge Bases as Connector Target](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-target-connector-managed-kb.html)

@@ -13,7 +13,7 @@ from agents import Model
 from openai.types.responses import ResponseTextDeltaEvent
 from starlette.testclient import TestClient
 
-from agent_app.config import AppConfig
+from agent_app.config import AppConfig, GatewayConfig
 from agent_app.contracts import (
     BAD_REQUEST_MESSAGE,
     SERVER_ERROR_MESSAGE,
@@ -26,14 +26,24 @@ from agent_app.service import stream_agent_response
 
 SESSION_HEADER = "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"
 CONFIG = AppConfig(
-    aws_region="us-east-2",
+    aws_region="us-east-1",
     model_id="openai.gpt-5.5",
     memory_id="memory-id",
     tracing_disabled="1",
-    gateway_url=(
-        "https://gateway-id.gateway.bedrock-agentcore.us-east-2.amazonaws.com/mcp"
+    weather_gateway=GatewayConfig(
+        url=(
+            "https://gateway-id.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
+        ),
+        region="us-east-1",
+        target_name="WeatherTimeMock",
     ),
-    gateway_target_name="WeatherTimeMock",
+    knowledge_gateway=GatewayConfig(
+        url=(
+            "https://knowledge-id.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
+        ),
+        region="us-east-1",
+        target_name="KnowledgeRetrieve",
+    ),
 )
 
 
@@ -82,12 +92,14 @@ class FakeMCP:
     def __init__(
         self,
         request_id: str,
+        kind: str,
         events: list[tuple[str, str]],
         *,
         fail_list: bool = False,
         rendezvous: AsyncRendezvous | None = None,
     ) -> None:
         self.request_id = request_id
+        self.kind = kind
         self.events = events
         self.fail_list = fail_list
         self.rendezvous = rendezvous
@@ -97,11 +109,11 @@ class FakeMCP:
 
     async def connect(self) -> None:
         self.connects += 1
-        self.events.append(("connect", self.request_id))
+        self.events.append((f"{self.kind}.connect", self.request_id))
 
     async def list_tools(self) -> list[object]:
         self.lists += 1
-        self.events.append(("list", self.request_id))
+        self.events.append((f"{self.kind}.list", self.request_id))
         if self.rendezvous is not None:
             await self.rendezvous.wait()
         if self.fail_list:
@@ -110,7 +122,7 @@ class FakeMCP:
 
     async def cleanup(self) -> None:
         self.cleanups += 1
-        self.events.append(("cleanup", self.request_id))
+        self.events.append((f"{self.kind}.cleanup", self.request_id))
 
 
 class FakeSession:
@@ -190,8 +202,18 @@ class RuntimeHarness:
         self.model_calls: list[AppConfig] = []
         self.stream_models: list[Model] = []
         self.sessions: list[FakeSession] = []
-        self.servers: list[FakeMCP] = []
-        self.agent_calls: list[tuple[Model, list[FakeMCP], bool, object]] = []
+        self.weather_servers: list[FakeMCP] = []
+        self.knowledge_servers: list[FakeMCP] = []
+        self.agent_calls: list[
+            tuple[
+                Model,
+                list[FakeMCP],
+                bool,
+                list[FakeMCP],
+                bool,
+                object,
+            ]
+        ] = []
         self.runner = FakeRunner(
             self.events,
             response_text=response_text,
@@ -214,34 +236,54 @@ class RuntimeHarness:
         self.sessions.append(session)
         return session
 
-    def mcp_server_factory(self, config: AppConfig) -> FakeMCP:
+    def weather_mcp_server_factory(self, config: AppConfig) -> FakeMCP:
         assert config is CONFIG
-        request_id = f"request-{len(self.servers) + 1}"
-        self.events.append(("mcp_factory", request_id))
+        request_id = f"request-{len(self.weather_servers) + 1}"
+        self.events.append(("weather.factory", request_id))
         server = FakeMCP(
             request_id,
+            "weather",
             self.events,
             fail_list=self.fail_list,
             rendezvous=self.rendezvous,
         )
-        self.servers.append(server)
+        self.weather_servers.append(server)
+        return server
+
+    def knowledge_mcp_server_factory(self, config: AppConfig) -> FakeMCP:
+        assert config is CONFIG
+        request_id = f"request-{len(self.knowledge_servers) + 1}"
+        self.events.append(("knowledge.factory", request_id))
+        server = FakeMCP(request_id, "knowledge", self.events)
+        self.knowledge_servers.append(server)
         return server
 
     def agent_factory(
         self,
         model: Model,
-        servers: list[FakeMCP],
-        gateway_available: bool,
+        weather_servers: list[FakeMCP],
+        weather_available: bool,
+        knowledge_servers: list[FakeMCP],
+        knowledge_available: bool,
     ) -> SimpleNamespace:
         request_id = (
-            servers[0].request_id
-            if servers
-            else self.servers[-1].request_id
+            weather_servers[0].request_id
+            if weather_servers
+            else knowledge_servers[0].request_id
         )
         self.events.append(("agent", request_id))
         manager = SimpleNamespace(request_id=request_id)
-        self.agent_calls.append((model, list(servers), gateway_available, manager))
-        return SimpleNamespace(manager=manager, weather=object())
+        self.agent_calls.append(
+            (
+                model,
+                list(weather_servers),
+                weather_available,
+                list(knowledge_servers),
+                knowledge_available,
+                manager,
+            )
+        )
+        return SimpleNamespace(manager=manager, weather=object(), knowledge=object())
 
     async def stream_service(self, **kwargs: Any):
         # async generator本体はHTTP層がiteratorを消費した時点で初めて実行される。
@@ -256,7 +298,8 @@ class RuntimeHarness:
             config=CONFIG,
             model_factory=self.model_factory,
             session_factory=self.session_factory,
-            mcp_server_factory=self.mcp_server_factory,
+            weather_mcp_server_factory=self.weather_mcp_server_factory,
+            knowledge_mcp_server_factory=self.knowledge_mcp_server_factory,
             agent_factory=self.agent_factory,
             stream_service=self.stream_service,
         )
@@ -278,7 +321,8 @@ def test_invalid_payload_returns_safe_4xx_before_any_dependency() -> None:
         config_loader=should_not_run,
         model_factory=should_not_run,
         session_factory=should_not_run,
-        mcp_server_factory=should_not_run,
+        weather_mcp_server_factory=should_not_run,
+        knowledge_mcp_server_factory=should_not_run,
         agent_factory=should_not_run,
         stream_service=should_not_stream,
     )
@@ -388,20 +432,26 @@ def test_valid_requests_reuse_model_and_create_mcp_agents_per_request() -> None:
 
     assert harness.model_calls == [CONFIG]
     assert harness.stream_models == [harness.model, harness.model]
-    assert len(harness.servers) == 2
-    assert harness.servers[0] is not harness.servers[1]
+    assert len(harness.weather_servers) == 2
+    assert len(harness.knowledge_servers) == 2
+    assert harness.weather_servers[0] is not harness.weather_servers[1]
+    assert harness.knowledge_servers[0] is not harness.knowledge_servers[1]
     assert len(harness.agent_calls) == 2
-    assert harness.agent_calls[0][:3] == (
+    assert harness.agent_calls[0][:5] == (
         harness.model,
-        [harness.servers[0]],
+        [harness.weather_servers[0]],
+        True,
+        [harness.knowledge_servers[0]],
         True,
     )
-    assert harness.agent_calls[1][:3] == (
+    assert harness.agent_calls[1][:5] == (
         harness.model,
-        [harness.servers[1]],
+        [harness.weather_servers[1]],
+        True,
+        [harness.knowledge_servers[1]],
         True,
     )
-    assert harness.agent_calls[0][3] is not harness.agent_calls[1][3]
+    assert harness.agent_calls[0][5] is not harness.agent_calls[1][5]
     assert [session.invocation for session in harness.sessions] == [
         InvocationInput(prompt="天気", actor_id="actor-1", session_id="session-1"),
         InvocationInput(prompt="時刻", actor_id="actor-2", session_id="session-2"),
@@ -417,13 +467,15 @@ def test_valid_requests_reuse_model_and_create_mcp_agents_per_request() -> None:
         assert harness.events.index(("session", session_id)) < harness.events.index(
             ("stream", session_id)
         )
-        assert harness.events.index(("list", request_id)) < harness.events.index(
+        assert harness.events.index(("weather.list", request_id)) < harness.events.index(
+            ("knowledge.list", request_id)
+        ) < harness.events.index(
             ("agent", request_id)
         )
-    assert [
-        (server.connects, server.lists, server.cleanups)
-        for server in harness.servers
-    ] == [(1, 1, 1), (1, 1, 1)]
+    assert all(
+        (server.connects, server.lists, server.cleanups) == (1, 1, 1)
+        for server in harness.weather_servers + harness.knowledge_servers
+    )
 
 
 def test_list_failure_calls_agent_factory_with_unavailable_state_after_cleanup() -> None:
@@ -442,9 +494,15 @@ def test_list_failure_calls_agent_factory_with_unavailable_state_after_cleanup()
         {"type": "text_delta", "delta": "取得できません。"},
         {"type": "completed"},
     ]
-    assert harness.agent_calls[0][:3] == (harness.model, [], False)
-    assert harness.events.index(("list", "request-1")) < harness.events.index(
-        ("cleanup", "request-1")
+    assert harness.agent_calls[0][:5] == (
+        harness.model,
+        [],
+        False,
+        [harness.knowledge_servers[0]],
+        True,
+    )
+    assert harness.events.index(("weather.list", "request-1")) < harness.events.index(
+        ("weather.cleanup", "request-1")
     ) < harness.events.index(("agent", "request-1"))
     assert harness.sessions[0].commits == 1
     assert harness.sessions[0].rollbacks == 0
@@ -468,7 +526,8 @@ def test_stream_failure_returns_safe_sse_and_rolls_back() -> None:
         {"type": "error", "message": STREAM_ERROR_MESSAGE}
     ]
     assert private_value not in response.text
-    assert harness.servers[0].cleanups == 1
+    assert harness.weather_servers[0].cleanups == 1
+    assert harness.knowledge_servers[0].cleanups == 1
     assert (harness.sessions[0].commits, harness.sessions[0].rollbacks) == (0, 1)
 
 
@@ -514,14 +573,21 @@ def test_concurrent_requests_share_only_cached_model() -> None:
     ]
     assert harness.model_calls == [CONFIG]
     assert harness.stream_models == [harness.model, harness.model]
-    assert len({id(server) for server in harness.servers}) == 2
-    assert len({id(call[3]) for call in harness.agent_calls}) == 2
+    assert len({id(server) for server in harness.weather_servers}) == 2
+    assert len({id(server) for server in harness.knowledge_servers}) == 2
+    assert len({id(call[5]) for call in harness.agent_calls}) == 2
     assert len({id(session) for session in harness.sessions}) == 2
     assert {session.invocation.session_id for session in harness.sessions} == {
         "parallel-1",
         "parallel-2",
     }
-    assert all(call[0] is harness.model and call[2] for call in harness.agent_calls)
-    assert all(len(call[1]) == 1 for call in harness.agent_calls)
-    assert all(server.cleanups == 1 for server in harness.servers)
+    assert all(
+        call[0] is harness.model and call[2] and call[4]
+        for call in harness.agent_calls
+    )
+    assert all(len(call[1]) == len(call[3]) == 1 for call in harness.agent_calls)
+    assert all(
+        server.cleanups == 1
+        for server in harness.weather_servers + harness.knowledge_servers
+    )
     assert all(session.commits == 1 for session in harness.sessions)

@@ -2,38 +2,61 @@
 
 import pytest
 
-from agent_app.config import AppConfig, ConfigurationError
+from agent_app.config import AppConfig, ConfigurationError, GatewayConfig
 
 
 VALID_GATEWAY_URL = (
-    "https://gateway-123.gateway.bedrock-agentcore.us-east-2.amazonaws.com/mcp"
+    "https://gateway-123.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
 )
 VALID_GATEWAY_TARGET_NAME = "WeatherTimeMock"
+VALID_KNOWLEDGE_GATEWAY_URL = (
+    "https://knowledge-456.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
+)
+VALID_KNOWLEDGE_GATEWAY_TARGET_NAME = "KnowledgeRetrieve"
 VALID_ENV = {
-    "AWS_REGION": "us-east-2",
+    "AWS_REGION": "us-east-1",
     "BEDROCK_OPENAI_MODEL_ID": "openai.gpt-5.5",
     "AGENTCORE_MEMORY_ID": "memory-id",
     "OPENAI_AGENTS_DISABLE_TRACING": "1",
     "AGENTCORE_GATEWAY_URL": VALID_GATEWAY_URL,
     "AGENTCORE_GATEWAY_TARGET_NAME": VALID_GATEWAY_TARGET_NAME,
+    "AGENTCORE_KNOWLEDGE_GATEWAY_URL": VALID_KNOWLEDGE_GATEWAY_URL,
+    "AGENTCORE_KNOWLEDGE_GATEWAY_TARGET_NAME": VALID_KNOWLEDGE_GATEWAY_TARGET_NAME,
 }
 
 
 def test_valid_config_is_loaded() -> None:
     assert AppConfig.from_env(VALID_ENV) == AppConfig(
-        aws_region="us-east-2",
+        aws_region="us-east-1",
         model_id="openai.gpt-5.5",
         memory_id="memory-id",
         tracing_disabled="1",
-        gateway_url=VALID_GATEWAY_URL,
-        gateway_target_name=VALID_GATEWAY_TARGET_NAME,
+        weather_gateway=GatewayConfig(
+            url=VALID_GATEWAY_URL,
+            region="us-east-1",
+            target_name=VALID_GATEWAY_TARGET_NAME,
+        ),
+        knowledge_gateway=GatewayConfig(
+            url=VALID_KNOWLEDGE_GATEWAY_URL,
+            region="us-east-1",
+            target_name=VALID_KNOWLEDGE_GATEWAY_TARGET_NAME,
+        ),
     )
+
+
+def test_existing_weather_environment_names_keep_compatibility_aliases() -> None:
+    config = AppConfig.from_env(VALID_ENV)
+
+    assert config.gateway_url == VALID_ENV["AGENTCORE_GATEWAY_URL"]
+    assert config.gateway_target_name == VALID_ENV["AGENTCORE_GATEWAY_TARGET_NAME"]
+    assert config.weather_gateway.region == "us-east-1"
+    assert config.knowledge_gateway.region == "us-east-1"
 
 
 @pytest.mark.parametrize(
     ("key", "value"),
     [
-        ("AWS_REGION", "us-east-1"),
+        ("AWS_REGION", "us-east-2"),
         ("BEDROCK_OPENAI_MODEL_ID", "openai.gpt-other"),
         ("AGENTCORE_MEMORY_ID", ""),
         ("OPENAI_AGENTS_DISABLE_TRACING", "0"),
@@ -68,42 +91,49 @@ def test_missing_config_is_rejected(
     assert VALID_GATEWAY_TARGET_NAME not in str(error.value)
     assert VALID_GATEWAY_URL not in caplog.text
     assert VALID_GATEWAY_TARGET_NAME not in caplog.text
+    assert VALID_KNOWLEDGE_GATEWAY_URL not in caplog.text
+    assert VALID_KNOWLEDGE_GATEWAY_TARGET_NAME not in caplog.text
 
 
 @pytest.mark.parametrize(
     "gateway_url",
     [
         pytest.param(
-            "http://gateway-123.gateway.bedrock-agentcore.us-east-2.amazonaws.com/mcp",
+            "http://gateway-123.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
             id="scheme",
         ),
         pytest.param("https://gateway.example.com/mcp", id="host"),
         pytest.param(
-            "https://gateway-123.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
+            "https://gateway-123.gateway.bedrock-agentcore.us-east-2.amazonaws.com/mcp",
             id="region",
         ),
         pytest.param(
-            "https://gateway-123.gateway.bedrock-agentcore.us-east-2.amazonaws.com/tools",
+            "https://gateway-123.gateway.bedrock-agentcore.us-east-1.amazonaws.com/tools",
             id="path",
         ),
         pytest.param(
-            "https://user:password@gateway-123.gateway.bedrock-agentcore.us-east-2.amazonaws.com/mcp",
+            "https://user:password@gateway-123.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
             id="userinfo",
         ),
         pytest.param(
-            "https://gateway-123.gateway.bedrock-agentcore.us-east-2.amazonaws.com:443/mcp",
+            "https://gateway-123.gateway.bedrock-agentcore.us-east-1.amazonaws.com:443/mcp",
             id="port",
         ),
         pytest.param(f"{VALID_GATEWAY_URL}?token=sensitive-value", id="query"),
         pytest.param(f"{VALID_GATEWAY_URL}#sensitive-fragment", id="fragment"),
     ],
 )
+@pytest.mark.parametrize(
+    "environment_key",
+    ["AGENTCORE_GATEWAY_URL", "AGENTCORE_KNOWLEDGE_GATEWAY_URL"],
+)
 def test_invalid_gateway_url_is_rejected_without_exposure(
+    environment_key: str,
     gateway_url: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    # 各URL構成要素は、SigV4署名先をus-east-2の専用Gatewayへ固定する安全境界に対応する。
-    env = {**VALID_ENV, "AGENTCORE_GATEWAY_URL": gateway_url}
+    # 各URL構成要素は、SigV4署名先をus-east-1の専用Gatewayへ固定する安全境界に対応する。
+    env = {**VALID_ENV, environment_key: gateway_url}
 
     with pytest.raises(ConfigurationError) as error:
         AppConfig.from_env(env)
@@ -123,10 +153,22 @@ def test_invalid_gateway_url_is_rejected_without_exposure(
         pytest.param("A" * 100, id="maximum-length"),
     ],
 )
-def test_valid_gateway_target_name_boundaries_are_loaded(target_name: str) -> None:
-    env = {**VALID_ENV, "AGENTCORE_GATEWAY_TARGET_NAME": target_name}
+@pytest.mark.parametrize(
+    "environment_key",
+    ["AGENTCORE_GATEWAY_TARGET_NAME", "AGENTCORE_KNOWLEDGE_GATEWAY_TARGET_NAME"],
+)
+def test_valid_gateway_target_name_boundaries_are_loaded(
+    environment_key: str, target_name: str
+) -> None:
+    env = {**VALID_ENV, environment_key: target_name}
 
-    assert AppConfig.from_env(env).gateway_target_name == target_name
+    config = AppConfig.from_env(env)
+    actual = (
+        config.weather_gateway.target_name
+        if environment_key == "AGENTCORE_GATEWAY_TARGET_NAME"
+        else config.knowledge_gateway.target_name
+    )
+    assert actual == target_name
 
 
 @pytest.mark.parametrize(
@@ -141,11 +183,16 @@ def test_valid_gateway_target_name_boundaries_are_loaded(target_name: str) -> No
         pytest.param("天気", id="non-ascii"),
     ],
 )
+@pytest.mark.parametrize(
+    "environment_key",
+    ["AGENTCORE_GATEWAY_TARGET_NAME", "AGENTCORE_KNOWLEDGE_GATEWAY_TARGET_NAME"],
+)
 def test_invalid_gateway_target_name_is_rejected_without_exposure(
+    environment_key: str,
     target_name: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    env = {**VALID_ENV, "AGENTCORE_GATEWAY_TARGET_NAME": target_name}
+    env = {**VALID_ENV, environment_key: target_name}
 
     with pytest.raises(ConfigurationError) as error:
         AppConfig.from_env(env)

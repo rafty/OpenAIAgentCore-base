@@ -25,7 +25,7 @@ from agent_core_cdk_stack.constructs.weather_time_mock_lambda_construct import (
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _TOOLS_SCHEMA_PATH = _REPOSITORY_ROOT / "lambda_tools" / "weather" / "tools.json"
 _TEST_ACCOUNT_ID = "123456789012"
-_TEST_REGION = "us-east-2"
+_TEST_REGION = "us-east-1"
 
 
 def _single_resource(

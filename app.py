@@ -10,13 +10,14 @@ from agent_core_cdk_stack.agent_core_stack import AgentCoreStack
 
 
 app = cdk.App()
-# accountはCDK標準の解決方法に委ね、モデル提供リージョンだけを仕様どおり固定する。
+# Managed Knowledge Baseとモデルを同一リージョンで利用するため、PoC全体を
+# 対応リージョンのus-east-1へ固定し、cross-region構成を作らない。
 AgentCoreStack(
     app,
     "OpenAiAgentCoreBaseStack",
     env=cdk.Environment(
         account=os.environ.get("CDK_DEFAULT_ACCOUNT"),
-        region="us-east-2",
+        region="us-east-1",
     ),
 )
 

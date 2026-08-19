@@ -13,7 +13,7 @@ from agents.stream_events import RawResponsesStreamEvent
 from openai.types.responses import ResponseTextDeltaEvent
 from starlette.testclient import TestClient
 
-from agent_app.config import AppConfig
+from agent_app.config import AppConfig, GatewayConfig
 from agent_app.contracts import InvocationInput
 from agent_app.runtime import create_runtime_app
 from agent_app.service import stream_agent_response
@@ -23,14 +23,22 @@ from agent_app.session import AgentCoreMemorySession
 SESSION_HEADER = "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"
 MODEL = object()
 CONFIG = AppConfig(
-    aws_region="us-east-2",
+    aws_region="us-east-1",
     model_id="openai.gpt-5.5",
     memory_id="memory",
     tracing_disabled="1",
-    gateway_url=(
-        "https://gateway-id.gateway.bedrock-agentcore.us-east-2.amazonaws.com/mcp"
+    weather_gateway=GatewayConfig(
+        url="https://gateway-id.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
+        region="us-east-1",
+        target_name="WeatherTimeMock",
     ),
-    gateway_target_name="WeatherTimeMock",
+    knowledge_gateway=GatewayConfig(
+        url=(
+            "https://knowledge-id.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
+        ),
+        region="us-east-1",
+        target_name="KnowledgeRetrieve",
+    ),
 )
 
 
@@ -154,16 +162,28 @@ class FakeAgentFactory:
     """接続確認済みMCPを受け取る新しいAgent factory境界を記録する。"""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[object, list[object], bool]] = []
+        self.calls: list[
+            tuple[object, list[object], bool, list[object], bool]
+        ] = []
 
     def __call__(
         self,
         model: object,
-        servers: list[object],
-        gateway_available: bool,
+        weather_servers: list[object],
+        weather_available: bool,
+        knowledge_servers: list[object],
+        knowledge_available: bool,
     ) -> SimpleNamespace:
-        self.calls.append((model, list(servers), gateway_available))
-        return SimpleNamespace(manager=object(), weather=object())
+        self.calls.append(
+            (
+                model,
+                list(weather_servers),
+                weather_available,
+                list(knowledge_servers),
+                knowledge_available,
+            )
+        )
+        return SimpleNamespace(manager=object(), weather=object(), knowledge=object())
 
 
 class FakeRunResult:
@@ -228,24 +248,35 @@ def _app(
     Any,
     RecordingSessionFactory,
     FakeMCPServerFactory,
+    FakeMCPServerFactory,
     FakeAgentFactory,
 ]:
     session_factory = RecordingSessionFactory(memory)
-    mcp_server_factory = FakeMCPServerFactory()
+    weather_mcp_factory = FakeMCPServerFactory()
+    knowledge_mcp_factory = FakeMCPServerFactory()
     agent_factory = FakeAgentFactory()
     app = create_runtime_app(
         config=CONFIG,
         model=MODEL,  # type: ignore[arg-type]
         agent_factory=agent_factory,  # type: ignore[arg-type]
-        mcp_server_factory=mcp_server_factory,
+        weather_mcp_server_factory=weather_mcp_factory,
+        knowledge_mcp_server_factory=knowledge_mcp_factory,
         session_factory=session_factory,
         stream_service=partial(stream_agent_response, runner=FakeRunner),
     )
-    return app, session_factory, mcp_server_factory, agent_factory
+    return (
+        app,
+        session_factory,
+        weather_mcp_factory,
+        knowledge_mcp_factory,
+        agent_factory,
+    )
 
 
 def test_ping_uses_production_runtime_health_contract() -> None:
-    app, session_factory, mcp_factory, agent_factory = _app(FakeMemoryDataClient())
+    app, session_factory, weather_mcp, knowledge_mcp, agent_factory = _app(
+        FakeMemoryDataClient()
+    )
 
     with TestClient(app) as client:
         response = client.get("/ping")
@@ -253,7 +284,8 @@ def test_ping_uses_production_runtime_health_contract() -> None:
     assert response.status_code == 200
     assert response.json()["status"] in {"Healthy", "HealthyBusy"}
     assert session_factory.sessions == []
-    assert mcp_factory.servers == []
+    assert weather_mcp.servers == []
+    assert knowledge_mcp.servers == []
     assert agent_factory.calls == []
 
 
@@ -267,7 +299,9 @@ def test_ping_uses_production_runtime_health_contract() -> None:
     ],
 )
 def test_invalid_input_returns_4xx_before_dependency_initialization(payload: Any) -> None:
-    app, session_factory, mcp_factory, agent_factory = _app(FakeMemoryDataClient())
+    app, session_factory, weather_mcp, knowledge_mcp, agent_factory = _app(
+        FakeMemoryDataClient()
+    )
 
     with TestClient(app) as client:
         response = client.post("/invocations", json=payload)
@@ -275,12 +309,13 @@ def test_invalid_input_returns_4xx_before_dependency_initialization(payload: Any
     assert response.status_code == 400
     assert response.json() == {"error": "入力内容が不正です。"}
     assert session_factory.sessions == []
-    assert mcp_factory.servers == []
+    assert weather_mcp.servers == []
+    assert knowledge_mcp.servers == []
     assert agent_factory.calls == []
 
 
 def test_context_or_config_failure_returns_safe_5xx() -> None:
-    valid_app, session_factory, _, _ = _app(FakeMemoryDataClient())
+    valid_app, session_factory, _, _, _ = _app(FakeMemoryDataClient())
 
     def invalid_config_loader() -> AppConfig:
         raise RuntimeError("config-internal-secret")
@@ -310,7 +345,7 @@ def test_context_or_config_failure_returns_safe_5xx() -> None:
 
 def test_http_sse_and_session_history_restore_and_separation() -> None:
     memory = FakeMemoryDataClient()
-    app, session_factory, mcp_factory, agent_factory = _app(memory)
+    app, session_factory, weather_mcp, knowledge_mcp, agent_factory = _app(memory)
     FakeRunner.fail = False
     FakeRunner.observed_history = []
 
@@ -373,17 +408,30 @@ def test_http_sse_and_session_history_restore_and_separation() -> None:
         ["commit_attempt", "commit"],
         ["commit_attempt", "commit"],
     ]
-    assert all(server.calls == ["connect", "list", "cleanup"] for server in mcp_factory.servers)
+    assert all(
+        server.calls == ["connect", "list", "cleanup"]
+        for server in weather_mcp.servers + knowledge_mcp.servers
+    )
     assert len(agent_factory.calls) == 4
     assert all(
-        model is MODEL and servers == [mcp_factory.servers[index]] and available
-        for index, (model, servers, available) in enumerate(agent_factory.calls)
+        model is MODEL
+        and weather_servers == [weather_mcp.servers[index]]
+        and weather_available
+        and knowledge_servers == [knowledge_mcp.servers[index]]
+        and knowledge_available
+        for index, (
+            model,
+            weather_servers,
+            weather_available,
+            knowledge_servers,
+            knowledge_available,
+        ) in enumerate(agent_factory.calls)
     )
 
 
 def test_stream_and_memory_failures_emit_only_error_and_roll_back() -> None:
     memory = FakeMemoryDataClient()
-    app, session_factory, mcp_factory, _ = _app(memory)
+    app, session_factory, weather_mcp, knowledge_mcp, _ = _app(memory)
     FakeRunner.observed_history = []
     FakeRunner.fail = True
 
@@ -413,4 +461,7 @@ def test_stream_and_memory_failures_emit_only_error_and_roll_back() -> None:
     assert session_factory.sessions[0].lifecycle == ["rollback"]
     assert session_factory.sessions[1].lifecycle == ["commit_attempt", "rollback"]
     assert memory.events.get(("memory", "actor", "session"), []) == []
-    assert all(server.calls == ["connect", "list", "cleanup"] for server in mcp_factory.servers)
+    assert all(
+        server.calls == ["connect", "list", "cleanup"]
+        for server in weather_mcp.servers + knowledge_mcp.servers
+    )

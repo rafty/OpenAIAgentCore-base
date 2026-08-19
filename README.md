@@ -22,12 +22,13 @@ SDDの基本方針、具体的な実施手順、共同開発のルールは、�
 
 ## AgentCore Runtime PoC
 
-このPoCは、OpenAI Agents SDKのマネージャーAgentとWeather AgentをAmazon Bedrock AgentCore Runtimeで実行します。マネージャーAgentが会話と最終回答を所有し、Weather Agentだけが専用のAgentCore GatewayへSigV4で接続して、Lambdaターゲットの`get_weather`と`get_time`を利用します。
+このPoCは、OpenAI Agents SDKのManager、Weather、AWS Knowledge AgentをAmazon Bedrock AgentCore Runtimeで実行します。Managerが会話と最終回答を所有し、Weather AgentとAWS Knowledge AgentをAgent-as-Toolとして必要に応じて利用します。
 
-Weather／Time Toolは接続確認用の固定モックだけを返し、現在の実天気や実時刻を取得しません。GatewayまたはToolを利用できない場合も、両Agentは値を推測せず取得不能を案内します。
+Weather AgentはWeather専用GatewayのLambdaターゲットから固定モックの`get_weather`／`get_time`だけを利用します。AWS Knowledge Agentは別のKnowledge専用GatewayからManaged Knowledge Baseの`Retrieve`だけを利用し、`knowledge-base-s3/`の5文書を根拠として社内AWS標準、見積基準、過去案件へ回答します。一方のGateway障害を他方へ波及させず、検索結果が空の状態と取得不能を区別します。
 
 - Agent構成、MCP接続、HTTP／SSE／Memory契約、コンテナおよびRuntime検証: [Agentドキュメント](docs/Agent/README.md)
-- Gateway、GatewayTarget、Lambda、IAM境界およびCDK検証: [CDKドキュメント](docs/CDK/README.md)
+- 2 Gateway、Managed Knowledge Base、Data Source、初回同期、IAM境界およびCDK検証: [CDKドキュメント](docs/CDK/README.md)
+- `us-east-1`のデプロイ済みAgentを実際に呼び出す手順とテストケース: [手動テストガイド](docs/ManualTesting/README.md)
 
 主要なローカル検証コマンドは次のとおりです。
 
@@ -37,3 +38,5 @@ uv run pytest
 uv run python app.py
 docker build --platform linux/arm64 -t openai-agentcore-poc:local agents
 ```
+
+PoC全体のデプロイ先は`us-east-1`です。初回`cdk diff`より前に、対象profileとaccountを確認して同リージョンをCDK bootstrapします。`uv run python app.py`とテストはAWSへ書き込みませんが、bootstrap、`cdk diff`、`cdk deploy`、初回ingestion job、Runtime／GatewayのAWS E2E、旧`us-east-2` stackの削除はAWS環境と料金へ影響します。実施順序と削除ゲートは[CDKドキュメント](docs/CDK/README.md)に従ってください。

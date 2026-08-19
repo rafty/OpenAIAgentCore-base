@@ -27,6 +27,8 @@ flowchart TD
 
 既存の会話所有権とAgents-as-Tools構成はADR-0002、Weather Agent専用Gatewayの境界はADR-0003に従う。
 
+当初の`us-east-2`向けCloudFormation差分確認では、同リージョンのresource schemaがManaged Knowledge BaseとManaged Knowledge Base用データソースconnectorを未サポートとして拒否した。AWS公式の対応リージョンと、`openai.gpt-5.5`を同時に利用できるリージョンを確認した結果、本PoC全体を`us-east-1`へ移行する。新リージョンでのE2E成功後、旧`us-east-2`環境を残さないことも本featureの要件とする。
+
 ## 目的
 
 - AWS Knowledge AgentがManaged Knowledge Baseを検索し、登録済みの社内知識だけを根拠として回答できるようにする。
@@ -34,6 +36,9 @@ flowchart TD
 - Managed Knowledge Bases Connectorの`Retrieve`を使用し、Lambdaを介さないGatewayからManaged Knowledge Baseまでの経路を検証する。
 - Managed Knowledge Base、S3データソース、専用Gateway、IAM、およびナレッジ文書をAWS CDKで再現可能にする。
 - ローカル文書をCDKデプロイでS3へ配置し、デプロイ後の明示的なコマンドで初回同期できる運用手順を提供する。
+- Runtime、Memory、Weather／Knowledge Gateway、Lambda、Managed Knowledge Base、S3および関連IAMを含むPoC全体を`us-east-1`へ配置する。
+- 初回deploy前に同一AWSアカウントの`us-east-1`をAWS CDKでbootstrapし、assetの配置とCloudFormation deployに必要な基盤を用意する。
+- `us-east-1`で初回同期とAWS E2Eを完了した後、旧`us-east-2`のPoC stackを安全に削除する。
 
 ## スコープ
 
@@ -42,9 +47,11 @@ flowchart TD
 - `knowledge-base-s3/`: Managed Knowledge Baseへ登録するMarkdownとsidecar metadataの正本
 - `agents/`: AWS Knowledge Agent、マネージャーAgentのルーティング、Knowledge専用MCP接続、取得結果と障害の処理
 - `agent_core_cdk_stack/`: Managed Knowledge Base、S3データソース、S3バケット、文書配置、Knowledge専用Gateway、Connector Target、IAM、Runtime設定
+- `app.py`: PoC全体のデプロイ先を`us-east-1`へ固定するCDKエントリーポイント
 - `tests/`: Agentルーティング、MCP Tool、RAG結果、障害処理、ナレッジ文書、metadata、CDKテンプレートの自動テスト
 - `README.md`および`docs/`: 構成、設定、デプロイ後同期、検証、制約、トラブルシューティングの更新
 - `docs/ADR/`: 本featureで確定した重要な設計判断の記録
+- AWS移行作業: `us-east-1`のCDK bootstrap、新stackのdeploy／E2E、成功後の旧`us-east-2` stackの削除・残存確認
 
 ## 対象外
 
@@ -68,6 +75,8 @@ flowchart TD
 - 利用者として、天気と社内標準の両方を含む質問に対し、マネージャーAgentが各専門Agentの結果を統合した回答を受け取りたい。
 - 開発者として、ナレッジ文書をリポジトリでレビューし、AWS CDKから同じ階層でS3へ配置したい。
 - 運用者として、`cdk deploy`の成功後に明示的なコマンドで初回同期を開始し、同期状態と成否を確認したい。
+- 運用者として、未bootstrapの`us-east-1`へ初回deployする前に、対象accountとregionを明示してCDK bootstrapを完了したい。
+- 運用者として、`us-east-1`の新環境が正常であることを確認してから旧`us-east-2`環境を削除し、二重課金と利用先の混在を避けたい。
 - 利用者として、関連文書がない場合やKnowledge経路が利用不能な場合に、架空の社内ルールではなく取得不能であることを知りたい。
 
 ## 機能要件
@@ -99,7 +108,7 @@ flowchart TD
 
 - システムは、Knowledge Base typeが`MANAGED`のAmazon Bedrock Managed Knowledge Baseを一つ作成しなければならない。
 - Managed Knowledge Baseはサービス管理Embeddingを使用し、カスタムEmbeddingモデルまたは顧客管理Vector Storeを必要としてはならない。
-- システムは、同一アカウントかつ`us-east-2`のGeneral Purpose S3バケットをManaged Knowledge Baseのデータソースとして登録しなければならない。
+- システムは、同一アカウントかつ`us-east-1`のGeneral Purpose S3バケットをManaged Knowledge Baseのデータソースとして登録しなければならない。
 - Managed Knowledge Baseは、S3に配置したMarkdownと対応するsidecar metadataを取り込めなければならない。
 - データソース同期後の検索結果には、同期対象となった追加または更新内容が反映されなければならない。
 - S3上から削除した文書を同期対象から削除する場合、意図しない大量削除を防止できる設定を持たなければならない。具体的な削除保護と閾値は実装計画で決定する。
@@ -153,7 +162,7 @@ knowledge-base-s3/
 
 ### FR-006: Knowledge専用GatewayとRetrieve Connector
 
-- システムは、既存Weather Gatewayとは別に、AWS Knowledge Agent専用のAgentCore Gatewayを`us-east-2`へ一つ作成しなければならない。
+- システムは、既存Weather Gatewayとは別に、AWS Knowledge Agent専用のAgentCore Gatewayを`us-east-1`へ一つ作成しなければならない。
 - Knowledge専用GatewayはMCP Gatewayとして動作し、受信認証に`AWS_IAM`を使用しなければならない。
 - Knowledge専用Gatewayは、`bedrock-knowledge-bases`の組み込みConnector Targetを一つ持たなければならない。
 - Connector Targetのcredential providerは`GATEWAY_IAM_ROLE`でなければならない。
@@ -190,6 +199,20 @@ knowledge-base-s3/
 - 実装後のAgent構成、CDK構成、環境設定、IAM境界、ナレッジ文書、metadata、デプロイ後同期、検証手順、制約を関連READMEと`docs/`へ反映しなければならない。
 - `cdk deploy`、初回同期、実検索、Runtime E2EがAWS環境を変更または利用料金を発生させ得る操作であることを明示しなければならない。
 - AWS E2Eを実施していない場合は、ローカル検証済みとAWS未検証を区別して記載しなければならない。
+- リージョン移行の順序、成功判定、旧環境の削除条件、削除後確認および復旧不能なデータを関連READMEと`docs/`へ記載しなければならない。
+
+### FR-010: `us-east-1`への移行と旧`us-east-2`環境の廃止
+
+- PoCのRuntime、Memory、Weather／Knowledge Gateway、GatewayTarget、Lambda、Managed Knowledge Base、S3および関連IAMは、同一AWSアカウントの`us-east-1`へ単一stackとして配置しなければならない。
+- `us-east-1`への初回`cdk diff`および`cdk deploy`より前に、対象profileとAWSアカウントを確認し、同アカウントの`us-east-1`をCDK bootstrapしなければならない。
+- bootstrapで作成する`us-east-1`の`CDKToolkit` stackは正常状態でなければならず、後続のtemplate、file assetおよびcontainer image assetを利用できなければならない。
+- Runtimeだけを`us-east-2`に残す構成や、Knowledge経路だけを別リージョンへ配置する構成を採用してはならない。
+- `us-east-1`のstackについて、CloudFormation事前検証、deploy、S3文書配置、初回同期、Gateway ToolおよびRuntime E2Eが成功するまで、旧`us-east-2`の`OpenAiAgentCoreBaseStack`を削除してはならない。
+- 新環境の検証結果を保存した後、旧`us-east-2`の`OpenAiAgentCoreBaseStack`とstack管理下のPoCリソースを削除しなければならない。
+- 旧PoC stackの削除では、現行デプロイ基盤である同アカウントの`us-east-1`の`CDKToolkit` stackを削除してはならない。
+- 旧PoC stack削除後の`us-east-2`の`CDKToolkit`は本featureの維持対象に含めず、同リージョンで今後CDK deployを行わない場合は削除済みでもよい。
+- 削除後、旧stackが存在せず、旧リージョンに本PoCのRuntime、Memory、Gateway、GatewayTarget、LambdaおよびKnowledge関連リソースが残っていないことを確認しなければならない。
+- 新環境のdeploy、同期またはE2Eが失敗した場合は旧環境を保持し、失敗原因を解消するまで削除へ進んではならない。
 
 ## 非機能要件
 
@@ -222,6 +245,9 @@ knowledge-base-s3/
 - 初回同期は`cdk deploy`から分離し、運用者が同期の開始と状態を明示的に確認できなければならない。
 - 同期失敗時は、同じ同期を無条件に繰り返す前に状態と失敗理由を確認できなければならない。
 - 定期同期、同期スケジュール、監視アラームは本featureの完了条件に含めない。
+- リージョン移行では、新環境を先に検証してから旧環境を削除する順序を変更してはならない。
+- `us-east-1`のbootstrapでは、対象account、profile、regionを個別に確認し、`OpenAiAgentCoreBaseStack`のdeploy前に`CDKToolkit`の成功状態を確認できなければならない。
+- 旧環境の削除前に対象account、profile、stack名、旧regionが`us-east-2`であることを再確認できなければならない。
 
 ## 受け入れ条件
 
@@ -298,10 +324,24 @@ knowledge-base-s3/
 - AgentコンテナをLinux ARM64向けにビルドできる。
 - README、Agentドキュメント、CDKドキュメント、ADR、本仕様書、実装、テストの間に矛盾がない。
 
+### AC-009: リージョン移行と旧環境削除
+
+- 対象AWSアカウントの`us-east-1`にCDK bootstrapを実行し、`CDKToolkit` stackが正常状態であることを確認できる。
+- `us-east-1`のbootstrap資産を使用してCDK template、file asset、Linux ARM64 container image assetを準備できる。
+- `us-east-1`のCloudFormation事前検証がManaged Knowledge BaseとManaged Knowledge Base用connectorを受理する。
+- `us-east-1`への`cdk deploy`が成功し、stackが正常状態になる。
+- 初回同期が成功し、Weather、Knowledge、複合質問を含むGateway／Runtime E2Eが成功する。
+- 上記成功前に旧`us-east-2` stackが削除されていないことを確認できる。
+- 上記成功後に旧`us-east-2`の`OpenAiAgentCoreBaseStack`を削除し、CloudFormation上で存在しないことを確認できる。
+- 旧`us-east-2`に本PoCの名前で識別できるRuntime、Memory、Gateway、GatewayTarget、LambdaおよびKnowledge関連リソースが残っていないことを確認できる。
+- 同アカウントの`us-east-1`の`CDKToolkit` stackが旧PoC stack削除後も維持されていることを確認できる。
+- `us-east-2`の`CDKToolkit`が存在しないことを、旧PoCリソースの残存または移行失敗として扱わない。
+
 ## 制約
 
 - 本featureはPoC用途であり、本番運用要件を満たすものではない。
-- AWSリージョンは既存スタックと同じ`us-east-2`に限定する。
+- 新しいPoC stackのAWSリージョンは`us-east-1`に限定し、単一stackを複数リージョンへ分割しない。
+- `us-east-1`は未bootstrapであるため、初回deployの前提作業としてCDK bootstrapを必須とする。
 - マネージャーAgentとスペシャリストAgentの関係はADR-0002に従う。
 - Weather Agent、Weather Gateway、Lambda Targetの構成と権限境界はADR-0003を維持する。
 - Knowledge検索にはManaged Knowledge Bases Connectorの`Retrieve`だけを使用する。
@@ -319,6 +359,7 @@ knowledge-base-s3/
 - Amazon Bedrock Managed Knowledge BaseとS3データソース
 - Amazon Bedrock AgentCore GatewayとManaged Knowledge Bases Connector
 - Amazon S3、AWS IAM、AWS CloudFormation
+- 同一AWSアカウントの`us-east-1`におけるAWS CDK bootstrap stackとasset基盤
 - AWS CDK `aws_bedrock`、`aws_bedrockagentcore`、`aws_s3`、`aws_s3_deployment`、`aws_iam` Construct Library
 - 既存CDKエントリーポイント`app.py`とスタック`agent_core_cdk_stack/agent_core_stack.py`
 - `knowledge-base-s3/`配下の5つのMarkdownと5つのsidecar metadata
@@ -326,6 +367,7 @@ knowledge-base-s3/
 - `docs/ADR/adr-0001-use-bedrock-mantle-with-runtime-role-sigv4.md`
 - `docs/ADR/adr-0002-use-agents-as-tools.md`
 - `docs/ADR/adr-0003-use-dedicated-agentcore-gateway-for-weather-tools.md`
+- `docs/ADR/adr-0006-migrate-poc-to-us-east-1-before-decommissioning-us-east-2.md`
 - `docs/Agent/README.md`
 - `docs/CDK/README.md`
 - 後続要件を管理する`specs/backlog/backlog.md`
@@ -345,3 +387,6 @@ knowledge-base-s3/
 - S3バケット、S3オブジェクト、Managed Knowledge Base、データソースのRemoval Policy
 - 初回同期と状態確認に使用する具体的なコマンド、識別子の解決方法、再実行手順
 - 自動テストで使用するModel、MCP、Gateway、Managed Knowledge Base、同期処理のテストダブル
+- `us-east-1`向けCDK bootstrapの確認・実行方法と、新stackの物理名衝突を避ける確認手順
+- `app.py`を`us-east-1`へ変更した後も旧`us-east-2` stackだけを誤りなく削除する具体的なコマンドと対象確認手順
+- 旧stack削除後に残存リソースを確認するAWS APIと識別条件

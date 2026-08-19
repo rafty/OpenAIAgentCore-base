@@ -66,7 +66,7 @@ def _session(client: FakeMemoryClient, *, actor: str = "actor", session: str = "
         memory_id="memory",
         actor_id=actor,
         session_id=session,
-        region="us-east-2",
+        region="us-east-1",
         client=client,
     )
 

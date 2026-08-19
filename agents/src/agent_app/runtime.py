@@ -21,7 +21,10 @@ from agent_app.contracts import (
     validate_session_id,
 )
 from agent_app.models import create_bedrock_responses_model
-from agent_app.gateway_tools import create_gateway_mcp_server
+from agent_app.gateway_tools import (
+    create_gateway_mcp_server,
+    create_knowledge_gateway_mcp_server,
+)
 from agent_app.service import (
     AgentFactory,
     MCPServerFactory,
@@ -47,7 +50,8 @@ def create_runtime_app(
     model: Model | None = None,
     model_factory: ModelFactory = create_bedrock_responses_model,
     agent_factory: AgentFactory = create_agents,
-    mcp_server_factory: MCPServerFactory = create_gateway_mcp_server,
+    weather_mcp_server_factory: MCPServerFactory = create_gateway_mcp_server,
+    knowledge_mcp_server_factory: MCPServerFactory = create_knowledge_gateway_mcp_server,
     session_factory: SessionFactory | None = None,
     memory_client_factory: MemoryClientFactory = create_memory_data_client,
     stream_service: StreamService = stream_agent_response,
@@ -112,14 +116,15 @@ def create_runtime_app(
         except Exception:
             return server_error_response()
 
-        # modelだけをprocess単位で共有し、MCP serverとAgentはiterator内部で毎回生成する。
-        # factory注入により、実AWSへ接続せず同じ本番境界を決定的に検証できる。
+        # modelだけをprocess単位で共有し、GatewayごとのMCP serverとAgentは
+        # iterator内部で毎回生成する。factoryを分け、障害とテスト注入を局所化する。
         return stream_service(
             config=active_config,
             model=active_model,
             prompt=invocation.prompt,
             session=session,
-            mcp_server_factory=mcp_server_factory,
+            weather_mcp_server_factory=weather_mcp_server_factory,
+            knowledge_mcp_server_factory=knowledge_mcp_server_factory,
             agent_factory=agent_factory,
         )
 
