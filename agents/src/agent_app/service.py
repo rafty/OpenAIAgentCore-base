@@ -18,11 +18,13 @@ from agent_app.gateway_tools import (
     MCP_CLIENT_SESSION_TIMEOUT_SECONDS,
     MCP_TRANSPORT_TIMEOUT_SECONDS,
     create_gateway_mcp_server,
+    create_knowledge_gateway_mcp_server,
 )
 from agent_app.session import AgentCoreMemorySession
 
 
-logger = logging.getLogger(__name__)
+# AgentCore標準loggerのchildを使い、Runtimeのlogging設定後も安全な障害分類を残す。
+logger = logging.getLogger("bedrock_agentcore.app.agent_app.service")
 
 
 class StreamingRunResult(Protocol):
@@ -42,7 +44,16 @@ class GatewayMCPServer(Protocol):
 
 
 MCPServerFactory = Callable[[AppConfig], GatewayMCPServer]
-AgentFactory = Callable[[Model, Sequence[GatewayMCPServer], bool], AgentBundle]
+AgentFactory = Callable[
+    [
+        Model,
+        Sequence[GatewayMCPServer],
+        bool,
+        Sequence[GatewayMCPServer],
+        bool,
+    ],
+    AgentBundle,
+]
 
 
 class MCPCleanupError(RuntimeError):
@@ -55,22 +66,22 @@ async def stream_agent_response(
     model: Model,
     prompt: str,
     session: AgentCoreMemorySession,
-    mcp_server_factory: MCPServerFactory = create_gateway_mcp_server,
+    weather_mcp_server_factory: MCPServerFactory = create_gateway_mcp_server,
+    knowledge_mcp_server_factory: MCPServerFactory = create_knowledge_gateway_mcp_server,
     agent_factory: AgentFactory = create_agents,
     runner: StreamingRunner = Runner,
 ) -> AsyncIterator[StreamEvent]:
     """cleanup、Memory commit、completedの順を守って一つのturnを実行する。"""
 
-    active_server: GatewayMCPServer | None = None
-    cleanup_attempted = False
+    active_servers: list[GatewayMCPServer] = []
+    cleanup_attempted: set[int] = set()
 
-    async def cleanup_active_server() -> None:
-        """cleanupを有限時間で行い、キャンセル中断時だけ同一taskで再試行可能にする。"""
+    async def cleanup_server(server: GatewayMCPServer) -> None:
+        """一つのserverを有限時間で解放し、二重cleanupを防ぐ。"""
 
-        nonlocal active_server, cleanup_attempted
-        if active_server is None or cleanup_attempted:
+        server_id = id(server)
+        if server_id in cleanup_attempted:
             return
-        server = active_server
         try:
             # asyncio.timeoutは現在taskのまま期限を設け、connectとcleanupを別taskへ
             # 分離してanyioのcancel scopeを壊すasyncio.wait_forを避ける。
@@ -82,37 +93,79 @@ async def stream_agent_response(
             raise
         except Exception as exc:
             # 通常の失敗とtimeoutはterminalなcleanup失敗として二重試行を防ぐ。
-            cleanup_attempted = True
+            cleanup_attempted.add(server_id)
             raise MCPCleanupError() from exc
         else:
-            # 正常終了後にだけactive状態を不可逆に外す。
-            cleanup_attempted = True
-            active_server = None
+            cleanup_attempted.add(server_id)
+            if server in active_servers:
+                active_servers.remove(server)
 
-    try:
-        gateway_available = False
-        try:
-            active_server = mcp_server_factory(config)
-        except Exception:
-            # factory段階では接続resourceが存在しないため、安全な取得不能Agentへ移行できる。
-            logger.warning("Gateway Toolを利用不能として継続します: stage=factory")
-        else:
+    async def cleanup_all_servers() -> None:
+        """接続と逆順に全serverのcleanupを試行してから成否を返す。"""
+
+        first_error: MCPCleanupError | None = None
+        for server in reversed(tuple(active_servers)):
             try:
-                async with asyncio.timeout(MCP_TRANSPORT_TIMEOUT_SECONDS):
-                    await active_server.connect()
-                async with asyncio.timeout(MCP_CLIENT_SESSION_TIMEOUT_SECONDS):
-                    await active_server.list_tools()
-                gateway_available = True
+                await cleanup_server(server)
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                # 部分接続を解放できた場合だけ、MCPなしの安全なAgentへfallbackする。
-                logger.warning("Gateway Toolを利用不能として継続します: stage=connect_or_list")
-                await cleanup_active_server()
+            except MCPCleanupError as exc:
+                # 一つの失敗で残りの接続を放置せず、全resourceの解放を試みる。
+                first_error = first_error or exc
+        if first_error is not None:
+            raise first_error
 
-        # Gateway利用可否を確定してからAgentを生成し、ManagerへMCPを直接渡さない。
-        servers = [active_server] if gateway_available and active_server is not None else []
-        bundle = agent_factory(model, servers, gateway_available)
+    async def prepare_gateway(
+        factory: MCPServerFactory,
+        *,
+        gateway_kind: str,
+    ) -> GatewayMCPServer | None:
+        """Gateway一系統のfactory、connect、Tool検証を独立して完結する。"""
+
+        try:
+            server = factory(config)
+        except Exception:
+            logger.warning(
+                "Gateway Toolを利用不能として継続します: kind=%s stage=factory",
+                gateway_kind,
+            )
+            return None
+
+        active_servers.append(server)
+        try:
+            async with asyncio.timeout(MCP_TRANSPORT_TIMEOUT_SECONDS):
+                await server.connect()
+            async with asyncio.timeout(MCP_CLIENT_SESSION_TIMEOUT_SECONDS):
+                await server.list_tools()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning(
+                "Gateway Toolを利用不能として継続します: kind=%s stage=connect_or_list",
+                gateway_kind,
+            )
+            # 部分接続を解放できた場合だけ、この経路を利用不能として継続する。
+            await cleanup_server(server)
+            return None
+        return server
+
+    try:
+        # 一方のfactory／接続障害を他方へ波及させず、利用可否を別々に確定する。
+        weather_server = await prepare_gateway(
+            weather_mcp_server_factory, gateway_kind="weather"
+        )
+        knowledge_server = await prepare_gateway(
+            knowledge_mcp_server_factory, gateway_kind="knowledge"
+        )
+        weather_servers = [weather_server] if weather_server is not None else []
+        knowledge_servers = [knowledge_server] if knowledge_server is not None else []
+        bundle = agent_factory(
+            model,
+            weather_servers,
+            weather_server is not None,
+            knowledge_servers,
+            knowledge_server is not None,
+        )
         result = runner.run_streamed(bundle.manager, input=prompt, session=session)
         async for event in result.stream_events():
             # Tool呼び出しなどのSDK内部eventは公開せず、利用者向けテキスト差分だけを中継する。
@@ -123,13 +176,13 @@ async def stream_agent_response(
                 yield text_delta_event(data.delta)
 
         # 接続解放前のturnをMemoryへ確定せず、cleanup→commit→completedを固定する。
-        await cleanup_active_server()
+        await cleanup_all_servers()
         await session.commit()
         yield completed_event()
     except asyncio.CancelledError:
         # 切断時も同じtaskでcleanupとrollbackをbest-effort実行し、元のcancelを再送出する。
         try:
-            await cleanup_active_server()
+            await cleanup_all_servers()
         except BaseException:
             pass
         try:
@@ -141,7 +194,7 @@ async def stream_agent_response(
         # 例外本文やendpointを記録せず、障害分類だけを運用ログへ残す。
         logger.warning("Agent turnをfail-closedで終了します: stage=runtime")
         try:
-            await cleanup_active_server()
+            await cleanup_all_servers()
         except BaseException:
             pass
         try:

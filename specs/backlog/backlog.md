@@ -18,6 +18,32 @@
 - S3にドキュメントを配置する
 - S3のネイティブコネクターを使用する
 
+## AgenticRetrieveStreamの対応
+
+AgentCore GatewayのManaged Knowledge Base Connectorには、 Retrieve、 AgenticRetrieveStream があります。
+AWSの現在のドキュメントでは、Retrieve は単一検索、AgenticRetrieveStream は複数ステップのagentic retrievalとして説明されています。
+https://docs.aws.amazon.com/ja_jp/bedrock-agentcore/latest/devguide/gateway-add-target-api-target-config.html
+
+最初は、
+```
+AWS Knowledge Agent
+    ↓
+Retrieve
+    ↓
+関連chunk取得
+    ↓
+Knowledge AgentのLLMで回答生成
+```
+がよいと思います。
+これなら、 S3文書が正しくIngestionされたか Embeddingされたか 検索クエリが正しいか どのchunkが返ったか
+Agentが取得結果から回答できたか Managerが正しくAWS Knowledge Agentを選択したか を比較的切り分けやすくなります。
+その後、
+```
+Retrieve
+        ↓
+AgenticRetrieveStream
+```
+へ進めれば、「普通のRAG」と「Agentic RAG」の違いもPoCできます。
 
 # SQLでDBに問い合わせするAgent & MCP?サーバ
 - 見積もり用DBにSQLで問い合わせするAgent & MCP?サーバを実装する。

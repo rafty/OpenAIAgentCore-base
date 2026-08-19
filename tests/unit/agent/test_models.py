@@ -5,11 +5,11 @@ from agent_app.models import create_bedrock_client, create_bedrock_responses_mod
 
 
 CONFIG = AppConfig(
-    "us-east-2",
+    "us-east-1",
     "openai.gpt-5.5",
     "memory-id",
     "1",
-    "https://gateway-id.gateway.bedrock-agentcore.us-east-2.amazonaws.com/mcp",
+    "https://gateway-id.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
     "WeatherTimeMock",
 )
 
@@ -24,8 +24,8 @@ def test_bedrock_responses_model_uses_sigv4_default_chain(monkeypatch) -> None:
     auth = runtime.prepare_async_request.__self__
 
     assert runtime.name == "bedrock"
-    assert runtime.region == "us-east-2"
-    assert str(client.base_url) == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/"
+    assert runtime.region == "us-east-1"
+    assert str(client.base_url) == "https://bedrock-mantle.us-east-1.api.aws/openai/v1/"
     assert client.api_key == ""
     assert type(auth).__name__ == "_BedrockSigV4Auth"
     assert auth._config.source == "default"

@@ -9,10 +9,10 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 
-AWS_REGION = "us-east-2"
+AWS_REGION = "us-east-1"
 BEDROCK_OPENAI_MODEL_ID = "openai.gpt-5.5"
 TRACING_DISABLED_VALUE = "1"
-GATEWAY_HOST_SUFFIX = ".gateway.bedrock-agentcore.us-east-2.amazonaws.com"
+GATEWAY_HOST_SUFFIX = ".gateway.bedrock-agentcore.us-east-1.amazonaws.com"
 GATEWAY_PATH = "/mcp"
 GATEWAY_TARGET_NAME_MAX_LENGTH = 100
 _GATEWAY_ID_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?")
@@ -29,15 +29,36 @@ class ConfigurationError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class GatewayConfig:
+    """一つのAgentCore Gatewayに閉じた非秘密接続設定。"""
+
+    url: str
+    region: str
+    target_name: str
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
-    """Runtimeから供給される非秘密設定。"""
+    """Runtimeから供給されるbase設定とGateway別設定。"""
 
     aws_region: str
     model_id: str
     memory_id: str
     tracing_disabled: str
-    gateway_url: str
-    gateway_target_name: str
+    weather_gateway: GatewayConfig
+    knowledge_gateway: GatewayConfig
+
+    @property
+    def gateway_url(self) -> str:
+        """既存Weather接続コード向けの後方互換alias。"""
+
+        return self.weather_gateway.url
+
+    @property
+    def gateway_target_name(self) -> str:
+        """既存Weather Tool名組み立て向けの後方互換alias。"""
+
+        return self.weather_gateway.target_name
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> AppConfig:
@@ -50,6 +71,12 @@ class AppConfig:
         tracing_disabled = values.get("OPENAI_AGENTS_DISABLE_TRACING", "").strip()
         gateway_url = values.get("AGENTCORE_GATEWAY_URL", "").strip()
         gateway_target_name = values.get("AGENTCORE_GATEWAY_TARGET_NAME", "").strip()
+        knowledge_gateway_url = values.get(
+            "AGENTCORE_KNOWLEDGE_GATEWAY_URL", ""
+        ).strip()
+        knowledge_gateway_target_name = values.get(
+            "AGENTCORE_KNOWLEDGE_GATEWAY_TARGET_NAME", ""
+        ).strip()
 
         # Gateway URLはSigV4の署名先になるため、scheme・region・service hostを固定し、
         # 利用者が任意の送信先へRuntime認証情報を署名させる余地を作らない。
@@ -60,6 +87,8 @@ class AppConfig:
             or tracing_disabled != TRACING_DISABLED_VALUE
             or not _is_valid_gateway_url(gateway_url)
             or not _is_valid_gateway_target_name(gateway_target_name)
+            or not _is_valid_gateway_url(knowledge_gateway_url)
+            or not _is_valid_gateway_target_name(knowledge_gateway_target_name)
         ):
             # 個別値を例外へ含めず、内部endpointや設定値がHTTP応答へ漏れないようにする。
             raise ConfigurationError()
@@ -69,8 +98,18 @@ class AppConfig:
             model_id=model_id,
             memory_id=memory_id,
             tracing_disabled=tracing_disabled,
-            gateway_url=gateway_url,
-            gateway_target_name=gateway_target_name,
+            # 既存Weather環境変数はrenameせず、Gateway単位の値へ変換して
+            # 新しいKnowledge設定と同じ検証・参照境界で扱う。
+            weather_gateway=GatewayConfig(
+                url=gateway_url,
+                region=aws_region,
+                target_name=gateway_target_name,
+            ),
+            knowledge_gateway=GatewayConfig(
+                url=knowledge_gateway_url,
+                region=aws_region,
+                target_name=knowledge_gateway_target_name,
+            ),
         )
 
 
