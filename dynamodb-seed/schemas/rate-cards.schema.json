@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "array",
+  "minItems": 2,
+  "items": {
+    "type": "object",
+    "required": ["master_id", "role", "daily_rate_jpy", "valid_from", "valid_to", "approval_status", "version", "schema_version"],
+    "additionalProperties": false,
+    "properties": {
+      "master_id": {"type": "string", "pattern": "^RATE-[A-Z0-9-]+$"},
+      "role": {"type": "string", "enum": ["AWS_ARCHITECT", "INFRA_ENGINEER"]},
+      "daily_rate_jpy": {"type": "integer", "minimum": 0},
+      "valid_from": {"type": "string", "format": "date"},
+      "valid_to": {"type": "string", "format": "date"},
+      "approval_status": {"const": "APPROVED"},
+      "version": {"type": "integer", "minimum": 1},
+      "schema_version": {"const": 1}
+    }
+  }
+}

@@ -1,0 +1,42 @@
+[
+  {
+    "project_id": "HIST-001",
+    "estimated_person_days": "25.0",
+    "actual_person_days": "26.0",
+    "duration_business_days": 60,
+    "role_actuals": [
+      {"role": "AWS_ARCHITECT", "person_days": "6.0"},
+      {"role": "INFRA_ENGINEER", "person_days": "20.0"}
+    ],
+    "variance_reason": "顧客提供ネットワークの疎通確認に追加対応が発生したため。",
+    "outcome_quality": "ACCEPTED",
+    "schema_version": 1
+  },
+  {
+    "project_id": "HIST-002",
+    "estimated_person_days": "17.0",
+    "actual_person_days": "18.0",
+    "duration_business_days": 40,
+    "role_actuals": [
+      {"role": "AWS_ARCHITECT", "person_days": "5.0"},
+      {"role": "INFRA_ENGINEER", "person_days": "13.0"}
+    ],
+    "variance_reason": "APIエラー設計の確認回数が増えたため。",
+    "outcome_quality": "ACCEPTED",
+    "schema_version": 1
+  },
+  {
+    "project_id": "HIST-003",
+    "estimated_person_days": "36.0",
+    "actual_person_days": "38.0",
+    "duration_business_days": 80,
+    "role_actuals": [
+      {"role": "PM", "person_days": "5.0"},
+      {"role": "AWS_ARCHITECT", "person_days": "10.0"},
+      {"role": "INFRA_ENGINEER", "person_days": "23.0"}
+    ],
+    "variance_reason": "コンテナ移行リハーサルを追加実施したため。",
+    "outcome_quality": "ACCEPTED",
+    "schema_version": 1
+  }
+]

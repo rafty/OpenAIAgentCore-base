@@ -22,11 +22,13 @@ from agent_app.contracts import (
 )
 from agent_app.models import create_bedrock_responses_model
 from agent_app.gateway_tools import (
+    create_estimation_gateway_mcp_server,
     create_gateway_mcp_server,
     create_knowledge_gateway_mcp_server,
 )
 from agent_app.service import (
     AgentFactory,
+    EstimationMCPServerFactory,
     MCPServerFactory,
     stream_agent_response,
 )
@@ -52,6 +54,7 @@ def create_runtime_app(
     agent_factory: AgentFactory = create_agents,
     weather_mcp_server_factory: MCPServerFactory = create_gateway_mcp_server,
     knowledge_mcp_server_factory: MCPServerFactory = create_knowledge_gateway_mcp_server,
+    estimation_mcp_server_factory: EstimationMCPServerFactory = create_estimation_gateway_mcp_server,
     session_factory: SessionFactory | None = None,
     memory_client_factory: MemoryClientFactory = create_memory_data_client,
     stream_service: StreamService = stream_agent_response,
@@ -118,14 +121,23 @@ def create_runtime_app(
 
         # modelだけをprocess単位で共有し、GatewayごとのMCP serverとAgentは
         # iterator内部で毎回生成する。factoryを分け、障害とテスト注入を局所化する。
+        service_arguments: dict[str, Any] = {
+            "config": active_config,
+            "model": active_model,
+            "prompt": invocation.prompt,
+            "session": session,
+            "weather_mcp_server_factory": weather_mcp_server_factory,
+            "knowledge_mcp_server_factory": knowledge_mcp_server_factory,
+            "agent_factory": agent_factory,
+        }
+        # Estimation未設定の従来環境では既存の注入用StreamService契約も維持する。
+        # 有効時だけ新しいfactory引数を渡し、PoC追加を破壊的変更にしない。
+        if active_config.estimation_gateway is not None:
+            service_arguments["estimation_mcp_server_factory"] = (
+                estimation_mcp_server_factory
+            )
         return stream_service(
-            config=active_config,
-            model=active_model,
-            prompt=invocation.prompt,
-            session=session,
-            weather_mcp_server_factory=weather_mcp_server_factory,
-            knowledge_mcp_server_factory=knowledge_mcp_server_factory,
-            agent_factory=agent_factory,
+            **service_arguments,
         )
 
     return app

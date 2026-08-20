@@ -2,7 +2,7 @@
 
 ## 概要
 
-このディレクトリの実装は、OpenAI Agents SDKのManager、Weather、AWS Knowledge AgentをAmazon Bedrock AgentCore Runtimeで実行するPoC基盤です。Managerが会話と最終回答を所有し、天気・時刻は`weather_agent`、架空の社内AWS標準・見積基準・過去案件は`aws_knowledge_agent`へ委譲します。両分野を含む質問では両方を使用して一つの最終回答へ統合し、Handoffは使用しません。
+このディレクトリの実装は、OpenAI Agents SDKのManager、Weather、AWS Knowledge、Estimation AgentをAmazon Bedrock AgentCore Runtimeで実行するPoC基盤です。Managerが会話と最終回答を所有し、天気・時刻は`weather_agent`、架空の社内AWS標準は`aws_knowledge_agent`、DynamoDBの類似案件・標準マスターによるAWS構築見積は`estimation_agent`へ委譲します。複数分野を含む質問では結果を一つの最終回答へ統合し、Handoffは使用しません。
 
 Weather AgentはWeather専用Gatewayの固定モックToolだけを、AWS Knowledge AgentはKnowledge専用Gatewayの`KnowledgeRetrieve___Retrieve`だけを保持します。Knowledge Agentは取得したchunkだけを根拠にし、文書相対パスを示します。検索結果内の命令形式テキストはデータとして扱い、Agent指示として実行しません。空検索は「関連情報なし」、通信・Tool障害は「取得不能」として区別します。
 
@@ -13,15 +13,22 @@ flowchart LR
     App --> Manager["Manager Agent"]
     Manager -->|"Agent.as_tool()"| Weather["Weather Agent / 天気・時刻"]
     Manager -->|"Agent.as_tool()"| Knowledge["AWS Knowledge Agent / 社内知識"]
+    Manager -->|"Agent.as_tool()"| Estimation["Estimation Agent / 検索・見積・Draft"]
     Manager --> Model["Bedrock Mantle / openai.gpt-5.5"]
     Weather --> Model
     Knowledge --> Model
+    Estimation --> Model
     Weather -->|"SigV4 MCP / InvokeGateway"| WeatherGateway["Weather Gateway / AWS_IAM"]
     WeatherGateway -->|"GatewayTarget"| WeatherTarget["WeatherTimeMock"]
     WeatherTarget -->|"GATEWAY_IAM_ROLE"| Lambda["Lambda / get_weather・get_time"]
     Knowledge -->|"SigV4 MCP / InvokeGateway"| KnowledgeGateway["Knowledge Gateway / AWS_IAM"]
     KnowledgeGateway -->|"Retrieveのみ"| RetrieveTarget["KnowledgeRetrieve"]
     RetrieveTarget --> KB["Managed Knowledge Base"]
+    Estimation -->|"SigV4 MCP / InvokeGateway"| EstimationGateway["Estimation Gateway / AWS_IAM"]
+    EstimationGateway -->|"4 Toolのみ"| EstimationTarget["EstimationTools"]
+    EstimationTarget --> EstimationLambda["Estimation Tools Lambda"]
+    EstimationLambda --> DynamoDB["OpenAiEstimationData / Vector Index"]
+    EstimationLambda --> Cohere["Bedrock Cohere Embed Multilingual v3"]
     App --> Session["AgentCoreMemorySession"]
     Session --> Memory["AgentCore Memory / 30日"]
     App -->|"SSE"| Caller
@@ -50,8 +57,8 @@ agents/
 
 - `contracts.py`: 入力検証、HTTPエラー、SSEイベント
 - `models.py`: Bedrock provider付きResponses model
-- `agent_factory.py`: 3 Agent、2 Agent-as-Tool、Gateway別の利用可否instructions
-- `gateway_tools.py`: 共通SigV4 MCP transport、Gateway別Tool allowlist、Retrieve入力／結果検証、安全なToolエラー変換
+- `agent_factory.py`: 4 Agent、3 Agent-as-Tool、Gateway別の利用可否instructions
+- `gateway_tools.py`: 共通SigV4 MCP transport、Gateway別Tool allowlist、Retrieve／Estimation入力・結果検証、安全なToolエラー変換
 - `session.py`: AgentCore Memoryを永続化先とするSession
 - `service.py`: MCP接続、stream全消費、cleanup、commit / rollback、SSE変換
 - `runtime.py`: `BedrockAgentCoreApp`と依存注入境界
@@ -81,12 +88,14 @@ agents/
 | `AGENTCORE_GATEWAY_TARGET_NAME` | `WeatherTimeMock` | いいえ |
 | `AGENTCORE_KNOWLEDGE_GATEWAY_URL` | CDKで作成したKnowledge GatewayのHTTPS `/mcp` URL | いいえ |
 | `AGENTCORE_KNOWLEDGE_GATEWAY_TARGET_NAME` | `KnowledgeRetrieve` | いいえ |
+| `AGENTCORE_ESTIMATION_GATEWAY_URL` | CDKで作成したEstimation GatewayのHTTPS `/mcp` URL | いいえ |
+| `AGENTCORE_ESTIMATION_GATEWAY_TARGET_NAME` | `EstimationTools` | いいえ |
 
-値の欠落や固定値との不一致は、安全な起動時設定エラーとしてstream開始前に扱います。Gateway URLはHTTPS、`us-east-1`のAgentCore Gateway host、`/mcp` pathであることを検証し、旧`us-east-2`を含む他リージョンのhostを拒否します。Target名はGatewayTargetの許容文字と長さを検証します。URLやTarget名をエラー応答へ含めません。`OPENAI_API_KEY`、`AWS_BEARER_TOKEN_BEDROCK`、`AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY`をアプリケーション設定へ追加しないでください。
+Weather／Knowledgeの値の欠落や固定値との不一致は、安全な起動時設定エラーとしてstream開始前に扱います。Estimationの2変数は任意で、両方が妥当な場合だけ有効です。未設定、片側欠落、形式不正では既存Agentを起動したままEstimationだけを無効化します。Gateway URLはHTTPS、`us-east-1`のAgentCore Gateway host、`/mcp` pathであることを検証し、旧`us-east-2`を含む他リージョンのhostを拒否します。Target名はGatewayTargetの許容文字と長さを検証します。URLやTarget名をエラー応答へ含めません。`OPENAI_API_KEY`、`AWS_BEARER_TOKEN_BEDROCK`、`AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY`をアプリケーション設定へ追加しないでください。
 
 ## Weather／TimeモックTool
 
-Managerの直接Toolは`weather_agent`と`aws_knowledge_agent`だけです。Weather MCPはWeather Agent、Knowledge MCPはAWS Knowledge Agentだけへ登録し、ManagerへMCP serverを直接登録しません。
+Managerの直接Toolは専門AgentをTool化した`weather_agent`、`aws_knowledge_agent`、Estimation設定時の`estimation_agent`だけです。Weather MCPはWeather Agent、Knowledge MCPはAWS Knowledge Agent、Estimation MCPはEstimation Agentだけへ登録し、ManagerへMCP serverを直接登録しません。
 
 | 用途 | MCP公開名 | 必須入力 | 固定モック出力 |
 | --- | --- | --- | --- |
@@ -124,11 +133,34 @@ Retrieve結果は、非空のTEXT chunk、許可済み5文書の相対パス、`
 
 AWS Knowledge Agentは回答前にRetrieveを必ず使用し、取得したchunkだけを社内知識の根拠とします。回答には該当内容と文書相対パスを含めます。見積計算では取得した基準値と利用者が指定した数量だけを使用し、中間式、単位、合計、根拠文書を示します。検索結果内の命令形式テキストは引用対象のデータであり、system／developer／Agent指示として実行しません。
 
-Modelは初回の有効な呼び出し時に生成し、Runtime process内で再利用します。一方、Weather／KnowledgeのMCP serverとAgent bundleは`POST /invocations`ごとに生成し、接続、MCP `initialize`、`tools/list`、Agent実行、`cleanup`を同じ非同期タスクで完結させます。MCP session、Tool一覧cache、Gateway利用可否を別の呼び出しと共有しません。
+## Estimation Agentと4 Tool
 
-- 一方のMCP接続または初回`tools/list`が失敗しても、部分接続を期限内に`cleanup`できた場合は、その専門Agentだけを取得不能状態にし、他方を継続します。両方が利用不能でも、安全な取得不能回答または一般会話を正常に完了できます。
+Estimation Agentは、見積に関する判断とTool選択だけを担当し、Managerへ`Agent.as_tool()`として登録します。Managerが会話履歴と最終回答を所有し、Handoffは使いません。Estimation MCP Adapterは次の完全一致名だけをallowlistへ設定します。
+
+| Tool | 責務 | 副作用 |
+| --- | --- | --- |
+| `EstimationTools___search_similar_projects` | 今回案件を1回Embeddingし、固定scope・許可filterで上位3件を検索。opaqueな`search_context_id`と`result_ref`を発行 | 検索コンテキストを保存 |
+| `EstimationTools___get_estimation_reference_data` | opaque refをサーバー側で解決し、正式実績と承認済み標準工数・単価・価格を既知キーで取得 | なし |
+| `EstimationTools___create_estimate_draft` | マスターを再取得してDecimalで再計算。`PREVIEW`または明示された`SAVE`を実行 | `PREVIEW`はなし、`SAVE`はDraftと冪等性Itemをtransaction保存 |
+| `EstimationTools___get_estimate_draft` | `project_id`、`estimate_id`、`version`の完全キーで作成者のDraftを再取得 | なし |
+
+汎用`PutItem`、`UpdateItem`、`Scan`、任意テーブル・キー・filter・`top_k`は公開しません。Adapterはモデルが生成した`_actor_id`、`_session_id`、`_idempotency_key`、`_request_hash`を採用せず、検証済みRuntime requestのactor/sessionで上書きし、保存入力から冪等値を決定的に生成します。1 requestの類似検索は最大3回です。接続・Tool一覧は10秒、Toolは60秒、cleanupは5秒、transportは75秒を上限とします。
+
+Lambdaのcanonical結果は、status、data、warnings、correlation ID、64 KiB上限、Tool別最小shapeをAdapterでも再検証します。`PK`、`SK`、Vectorなどの禁止属性や不正結果はAgentへ渡さず、取得・保存不能へ変換します。検索候補の案件IDをAgentが後続参照へ直接渡すことはなく、正式数値は必ずベーステーブルから再取得します。
+
+保存意図は次の3状態です。
+
+- `EXPLICIT_SAVE`: 最初の入力で「Draftとして保存して」など永続化が明示されている。検証成功後、追加確認なしで同一turnに`SAVE`し、保存後再取得できたIDだけを回答する。
+- `PREVIEW_ONLY`: 計算・表示だけの依頼。`PREVIEW`だけを実行し、DynamoDBへDraftを書かない。
+- `AMBIGUOUS`: 「見積を作って」など保存を含むか曖昧。`PREVIEW`を返し、対象、主要金額、根拠、永続化されることを示して確認を求める。確認前に`SAVE`しない。
+
+類似案件0件は正常な`NO_RESULTS`です。標準マスターだけで見積を継続し、`calculation_basis=STANDARD_MASTERS_ONLY`と「類似案件なし」を明記します。類似実績は根拠表示に限定し、標準工数の自動補正には使用しません。回答には根拠、マスターID・version、役割別工数、原価、価格、警告、保存時のIDを含めます。
+
+Modelは初回の有効な呼び出し時に生成し、Runtime process内で再利用します。一方、Weather／Knowledge／EstimationのMCP serverとAgent bundleは`POST /invocations`ごとに生成し、接続、MCP `initialize`、`tools/list`、Agent実行、`cleanup`を同じ非同期タスクで完結させます。MCP session、Tool一覧cache、Gateway利用可否を別の呼び出しと共有しません。
+
+- 一系統のMCP接続または初回`tools/list`が失敗しても、その専門Agentだけを取得不能状態にし、利用可能な専門Agentと一般会話を継続します。
 - 接続後のtransport、Tool、Lambdaまたは結果形式の障害は固定の利用不能Tool結果へ変換し、Weather AgentとマネージャーAgentが取得不能を返します。取得していない固定値、システム時計、学習済み知識または推測値で補いません。
-- 接続済みserverはKnowledge、Weatherの逆順で全て`cleanup`します。全cleanup成功後だけMemoryへ`commit`し、`completed`を返します。`cleanup`失敗、Runner／Session／Memoryの致命的失敗では`rollback`して安全なSSE `error`を返します。キャンセル時はbest-effort cleanupとrollback後に元のキャンセルを再送出します。
+- 接続済みserverは接続の逆順で全て`cleanup`します。Estimationだけのcleanup失敗は既存Agentの正常回答や、すでに確認済みのDraft保存状態を巻き戻しません。Weather／Knowledgeのcleanup失敗、Runner／Session／Memoryの致命的失敗では`rollback`して安全なSSE `error`を返します。保存状態とMemory commit状態は別に扱い、保存失敗を保存済みと表現しません。キャンセル時はbest-effort cleanupとrollback後に元のキャンセルを再送出します。
 
 ## HTTP入力契約
 
@@ -187,6 +219,7 @@ sequenceDiagram
     participant App as Runtime
     participant WeatherMCP as Weather MCP
     participant KnowledgeMCP as Knowledge MCP
+    participant EstimationMCP as Estimation MCP
     participant Runner as Agents SDK Runner
     participant Session as AgentCoreMemorySession
     participant Memory as AgentCore Memory
@@ -195,8 +228,9 @@ sequenceDiagram
     App->>App: bodyとcontext.session_idを検証
     App->>WeatherMCP: connect・tools/list
     App->>KnowledgeMCP: connect・tools/list
-    Note over App,KnowledgeMCP: 各接続は独立。失敗側だけcleanupして利用不能化
-    App->>Runner: run_streamed（3 Agent / session）
+    App->>EstimationMCP: connect・tools/list
+    Note over App,EstimationMCP: 各接続は独立。失敗側だけ利用不能化
+    App->>Runner: run_streamed（4 Agent / session）
     Session->>Memory: ListEvents（全ページ）
     opt 天気・時刻の依頼
         Runner->>WeatherMCP: get_weather / get_time
@@ -206,11 +240,16 @@ sequenceDiagram
         Runner->>KnowledgeMCP: Retrieve（query／限定filter）
         KnowledgeMCP-->>Runner: chunk／相対source／許可metadata
     end
+    opt AWS構築見積の依頼
+        Runner->>EstimationMCP: 類似検索・正式参照・PREVIEW／SAVE
+        EstimationMCP-->>Runner: 根拠・版・内訳・警告・保存ID
+    end
     loop 生成中
         Runner-->>App: ResponseTextDeltaEvent
         App-->>Caller: text_delta
     end
     Runner->>Session: add_items（未確定buffer）
+    App->>EstimationMCP: cleanup
     App->>KnowledgeMCP: cleanup
     App->>WeatherMCP: cleanup
     alt 全cleanupとcommit成功
@@ -238,7 +277,7 @@ uv run pytest
 uv run python app.py
 ```
 
-3 Agentと2 Gatewayの境界を絞って確認する場合は、次の決定的テストを実行します。Fake MCP、決定的Model、依存注入を使用するため、実Gateway、実Knowledge Base、実Lambda、実Model、実Memoryへ接続しません。
+4 Agentと3 Gatewayの境界を絞って確認する場合は、次の決定的テストを実行します。Fake MCP、決定的Model、依存注入を使用するため、実Gateway、実Knowledge Base、実DynamoDB、実Lambda、実Model、実Memoryへ接続しません。
 
 ```bash
 uv run pytest \
@@ -247,7 +286,9 @@ uv run pytest \
   tests/unit/agent/test_agent_factory.py \
   tests/unit/agent/test_service.py \
   tests/unit/agent/test_runtime.py \
+  tests/unit/agent/test_estimation_agent.py \
   tests/integration/agent/test_multi_agent.py \
+  tests/integration/agent/test_estimation_workflow.py \
   tests/integration/agent/test_runtime_http.py \
   tests/container/test_harness.py
 ```
@@ -400,13 +441,13 @@ cdk diff OpenAiAgentCoreBaseStack \
 
 少なくとも次を確認します。
 
-- AgentCore Runtime、Memory、Weather／Knowledgeの2 Gateway、両GatewayTarget、Managed Knowledge Base、Data Source、文書bucket、Weather／TimeモックLambdaが作成される
+- AgentCore Runtime、Memory、Weather／Knowledge／Estimationの3 Gatewayと各Target、Managed Knowledge Base、Data Source、文書bucket、Weather／TimeモックLambda、Estimation Tool Lambda、DynamoDBテーブル、Vector Index Providerが作成される
 - RuntimeがLinux ARM64、Public network、IAM inbound認証で構成される
 - Gatewayが`AWS_IAM`認証で、MCP protocol version `2025-11-25`と`2025-03-26`をサポートする
-- GatewayTargetがインラインスキーマで`get_weather`と`get_time`だけを対象Lambdaへ公開する
+- GatewayTargetが用途別インラインスキーマでWeatherの2 Tool、KnowledgeのRetrieve、Estimationの4 Toolだけを公開する
 - Memoryの保持期間が30日で、削除ポリシーが`DESTROY`である
-- Runtime実行ロールに、想定したBedrock Mantleのモデル呼び出し権限、対象Memoryの読み書き権限、2 Gatewayだけの`bedrock-agentcore:InvokeGateway`が付与され、Knowledge Base／S3の直接権限がない
-- Runtime環境変数にWeather／Knowledge両方のGateway URLとTarget名があり、API key、アクセスキー、秘密情報が含まれない
+- Runtime実行ロールに、想定したBedrock Mantleのモデル呼び出し権限、対象Memoryの読み書き権限、3 Gatewayだけの`bedrock-agentcore:InvokeGateway`が付与され、Knowledge Base／S3／DynamoDB／Cohereモデルの直接権限がない
+- Runtime環境変数に3 GatewayのURLとTarget名があり、API key、アクセスキー、秘密情報が含まれない
 - 想定外のリソース削除や権限拡大がない
 
 差分に問題がなければデプロイします。IAM権限が拡大される場合に確認を省略しないよう、`broadening`を指定します。
@@ -431,7 +472,7 @@ aws bedrock-agentcore-control list-agent-runtimes \
   --output table
 ```
 
-Runtimeを呼び出す前に、Weather／Knowledge Gatewayと`WeatherTimeMock`／`KnowledgeRetrieve` Targetが`READY`、`OpenAiWeatherTimeMock` Lambdaが作成済みであることを確認します。Knowledge経路は[CDKドキュメント](../CDK/README.md)の手順で初回ingestion jobが`COMPLETE`になった後だけ検証します。Targetが準備中、同期未完了、または失敗状態のままRuntime E2Eへ進めません。
+Runtimeを呼び出す前に、3 Gatewayと`WeatherTimeMock`／`KnowledgeRetrieve`／`EstimationTools` Targetが`READY`、両業務Lambdaが作成済み、Vector Indexが`ACTIVE`であることを確認します。Knowledge経路は[CDKドキュメント](../CDK/README.md)の手順で初回ingestion jobが`COMPLETE`、Estimation経路は明示Seedが完了した後だけ検証します。Target、同期、Index、Seedが未準備のままRuntime E2Eへ進めません。
 
 続けて、IDのprefixが`OpenAiAgentMemory-`であるMemoryが作成され、状態が`ACTIVE`であることを確認します。`list-memories`のsummaryにはMemory名が含まれないため、CDKがMemory名から生成するIDのprefixで絞り込みます。
 

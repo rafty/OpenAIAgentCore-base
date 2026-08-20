@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "array",
+  "minItems": 3,
+  "items": {
+    "type": "object",
+    "required": ["project_id", "project_name", "entity_type", "search_scope", "project_type", "architecture_family", "outcome_quality", "search_summary", "schema_version"],
+    "additionalProperties": false,
+    "properties": {
+      "project_id": {"type": "string", "pattern": "^HIST-[0-9]{3}$"},
+      "project_name": {"type": "string", "minLength": 1, "maxLength": 200},
+      "entity_type": {"const": "HISTORICAL_PROJECT"},
+      "search_scope": {"const": "ORG_SAMPLE#INTERNAL"},
+      "project_type": {"type": "string", "enum": ["NEW_BUILD", "MIGRATION"]},
+      "architecture_family": {"type": "string", "enum": ["EC2_RDS_WEB", "SERVERLESS_API", "ECS_RDS_WEB"]},
+      "outcome_quality": {"type": "string", "enum": ["ACCEPTED"]},
+      "search_summary": {"type": "string", "minLength": 20, "maxLength": 2048},
+      "schema_version": {"const": 1}
+    }
+  }
+}

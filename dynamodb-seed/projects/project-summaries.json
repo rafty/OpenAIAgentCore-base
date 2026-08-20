@@ -1,0 +1,35 @@
+[
+  {
+    "project_id": "HIST-001",
+    "project_name": "Sample Project Alpha",
+    "entity_type": "HISTORICAL_PROJECT",
+    "search_scope": "ORG_SAMPLE#INTERNAL",
+    "project_type": "NEW_BUILD",
+    "architecture_family": "EC2_RDS_WEB",
+    "outcome_quality": "ACCEPTED",
+    "search_summary": "社内業務Webシステムの新規AWS構築。Application Load Balancer、EC2 5台、RDS 2DB、CloudWatchアラーム12個を使用し、基本設計、詳細設計、構築、単体テストを実施した案件。",
+    "schema_version": 1
+  },
+  {
+    "project_id": "HIST-002",
+    "project_name": "Sample Project Beta",
+    "entity_type": "HISTORICAL_PROJECT",
+    "search_scope": "ORG_SAMPLE#INTERNAL",
+    "project_type": "NEW_BUILD",
+    "architecture_family": "SERVERLESS_API",
+    "outcome_quality": "ACCEPTED",
+    "search_summary": "サーバーレスAPI基盤の新規AWS構築。Amazon API Gateway、AWS Lambda 6 Function、DynamoDB 2 Tableを使用し、API基盤の設計、構築、単体テストを実施した案件。",
+    "schema_version": 1
+  },
+  {
+    "project_id": "HIST-003",
+    "project_name": "Sample Project Gamma",
+    "entity_type": "HISTORICAL_PROJECT",
+    "search_scope": "ORG_SAMPLE#INTERNAL",
+    "project_type": "MIGRATION",
+    "architecture_family": "ECS_RDS_WEB",
+    "outcome_quality": "ACCEPTED",
+    "search_summary": "コンテナ化を伴うWebシステムのAWS移行。Application Load Balancer、Amazon ECS Service 3個、RDS 2DB、CloudWatchアラーム20個を使用し、移行設計、構築、テストを実施した案件。",
+    "schema_version": 1
+  }
+]

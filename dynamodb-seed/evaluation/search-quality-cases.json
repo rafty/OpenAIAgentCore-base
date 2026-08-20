@@ -1,0 +1,8 @@
+[
+  {"case_id":"SEARCH-001","query":"ALB、EC2 5台、RDS 2DB、CloudWatchアラームを使う社内Webシステムの新規構築","filters":{"project_type":"NEW_BUILD","architecture_family":"EC2_RDS_WEB","outcome_quality":"ACCEPTED"},"expected_top1_project_id":"HIST-001"},
+  {"case_id":"SEARCH-002","query":"仮想サーバーとPostgreSQLをロードバランサー配下に置く業務Web基盤の設計構築","filters":{"project_type":"NEW_BUILD","architecture_family":"EC2_RDS_WEB"},"expected_top1_project_id":"HIST-001"},
+  {"case_id":"SEARCH-003","query":"API GatewayとLambda 6個、DynamoDB 2テーブルで構成するサーバーレスAPI","filters":{"project_type":"NEW_BUILD","architecture_family":"SERVERLESS_API"},"expected_top1_project_id":"HIST-002"},
+  {"case_id":"SEARCH-004","query":"サーバーレス関数とNoSQLを利用したAPIバックエンドの新規AWS構築","filters":{"architecture_family":"SERVERLESS_API","outcome_quality":"ACCEPTED"},"expected_top1_project_id":"HIST-002"},
+  {"case_id":"SEARCH-005","query":"ALBとECS Service 3個、RDSを利用するコンテナWebシステム移行","filters":{"project_type":"MIGRATION","architecture_family":"ECS_RDS_WEB"},"expected_top1_project_id":"HIST-003"},
+  {"case_id":"SEARCH-006","query":"既存Webアプリをコンテナ化してECSとRDSへ移行し監視アラームも構築","filters":{"project_type":"MIGRATION","outcome_quality":"ACCEPTED"},"expected_top1_project_id":"HIST-003"}
+]
