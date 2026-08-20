@@ -42,8 +42,8 @@ def test_agentcore_resources_and_properties(tmp_path) -> None:
     endpoints = [r for r in resources.values() if r["Type"] == "AWS::BedrockAgentCore::RuntimeEndpoint"]
     assert len(memories) == 1
     assert len(runtime_entries) == 1
-    assert len(gateway_entries) == 2
-    assert len(target_entries) == 2
+    assert len(gateway_entries) == 3
+    assert len(target_entries) == 3
     assert endpoints == []
 
     memory = memories[0]
@@ -60,12 +60,14 @@ def test_agentcore_resources_and_properties(tmp_path) -> None:
     }
     weather_gateway_id, weather_gateway = gateways_by_name["OpenAiWeatherGateway"]
     knowledge_gateway_id, knowledge_gateway = gateways_by_name["OpenAiKnowledgeGateway"]
+    estimation_gateway_id, estimation_gateway = gateways_by_name["OpenAiEstimationGateway"]
     targets_by_name = {
         resource["Properties"]["Name"]: logical_id
         for logical_id, resource in target_entries
     }
     weather_target_id = targets_by_name["WeatherTimeMock"]
     knowledge_target_id = targets_by_name["KnowledgeRetrieve"]
+    estimation_target_id = targets_by_name["EstimationTools"]
     runtime = runtime_resource["Properties"]
     assert runtime["ProtocolConfiguration"] == "HTTP"
     assert runtime["NetworkConfiguration"] == {"NetworkMode": "PUBLIC"}
@@ -86,15 +88,20 @@ def test_agentcore_resources_and_properties(tmp_path) -> None:
             "Fn::GetAtt": [knowledge_gateway_id, "GatewayUrl"],
         },
         "AGENTCORE_KNOWLEDGE_GATEWAY_TARGET_NAME": "KnowledgeRetrieve",
+        "AGENTCORE_ESTIMATION_GATEWAY_URL": {
+            "Fn::GetAtt": [estimation_gateway_id, "GatewayUrl"],
+        },
+        "AGENTCORE_ESTIMATION_GATEWAY_TARGET_NAME": "EstimationTools",
     }
     assert "Fn::GetAtt" in environment["AGENTCORE_MEMORY_ID"]
 
     # URL文字列ではなく同一Gatewayのtokenを照合し、別Gatewayへの誤配線を検出する。
-    assert {weather_target_id, knowledge_target_id}.issubset(
+    assert {weather_target_id, knowledge_target_id, estimation_target_id}.issubset(
         set(runtime_resource["DependsOn"])
     )
     assert weather_gateway["Properties"]["Name"] == "OpenAiWeatherGateway"
     assert knowledge_gateway["Properties"]["Name"] == "OpenAiKnowledgeGateway"
+    assert estimation_gateway["Properties"]["Name"] == "OpenAiEstimationGateway"
 
     runtime_role_logical_id = runtime["RoleArn"]["Fn::GetAtt"][0]
     runtime_policies = [
@@ -121,6 +128,11 @@ def test_agentcore_resources_and_properties(tmp_path) -> None:
             "Effect": "Allow",
             "Resource": {"Fn::GetAtt": [knowledge_gateway_id, "GatewayArn"]},
         },
+        {
+            "Action": "bedrock-agentcore:InvokeGateway",
+            "Effect": "Allow",
+            "Resource": {"Fn::GetAtt": [estimation_gateway_id, "GatewayArn"]},
+        },
     ]
 
     # RuntimeはGatewayだけを呼び、Knowledge Baseと文書bucketへ直接到達しない。
@@ -136,6 +148,8 @@ def test_agentcore_resources_and_properties(tmp_path) -> None:
     assert "bedrock:GetKnowledgeBase" not in runtime_actions
     assert "bedrock:Retrieve" not in runtime_actions
     assert not any(action.startswith("s3:") for action in runtime_actions)
+    assert not any(action.startswith("dynamodb:") for action in runtime_actions)
+    assert "bedrock:InvokeModel" not in runtime_actions
 
     knowledge_base_id = next(
         logical_id
@@ -148,6 +162,9 @@ def test_agentcore_resources_and_properties(tmp_path) -> None:
         if resource["Type"] == "AWS::Bedrock::DataSource"
     )
     assert rendered["Outputs"] == {
+        "EstimationTableName": {
+            "Value": rendered["Outputs"]["EstimationTableName"]["Value"],
+        },
         "KnowledgeBaseId": {
             "Description": "Initial ingestion用Managed Knowledge Base ID",
             "Value": {"Fn::GetAtt": [knowledge_base_id, "KnowledgeBaseId"]},
@@ -155,6 +172,10 @@ def test_agentcore_resources_and_properties(tmp_path) -> None:
         "KnowledgeDataSourceId": {
             "Description": "Initial ingestion用Data Source ID",
             "Value": {"Fn::GetAtt": [data_source_id, "DataSourceId"]},
+        },
+        "EstimationVectorIndexName": {
+            "Description": "Estimation Seed／E2E用Vector Index名",
+            "Value": "EstimationProjectVectorIndexV1",
         },
     }
 
@@ -173,5 +194,5 @@ def test_agentcore_resources_and_properties(tmp_path) -> None:
     app.synth()
     assets = json.loads((tmp_path / "OpenAiAgentCoreBaseStack.assets.json").read_text())
     docker_images = list(assets["dockerImages"].values())
-    assert len(docker_images) == 1
-    assert docker_images[0]["source"]["platform"] == "linux/arm64"
+    assert len(docker_images) == 3
+    assert all(image["source"]["platform"] == "linux/arm64" for image in docker_images)

@@ -47,6 +47,8 @@ class AppConfig:
     tracing_disabled: str
     weather_gateway: GatewayConfig
     knowledge_gateway: GatewayConfig
+    estimation_gateway: GatewayConfig | None = None
+    estimation_gateway_state: str = "UNSET"
 
     @property
     def gateway_url(self) -> str:
@@ -77,6 +79,12 @@ class AppConfig:
         knowledge_gateway_target_name = values.get(
             "AGENTCORE_KNOWLEDGE_GATEWAY_TARGET_NAME", ""
         ).strip()
+        estimation_gateway_url = values.get(
+            "AGENTCORE_ESTIMATION_GATEWAY_URL", ""
+        ).strip()
+        estimation_gateway_target_name = values.get(
+            "AGENTCORE_ESTIMATION_GATEWAY_TARGET_NAME", ""
+        ).strip()
 
         # Gateway URLはSigV4の署名先になるため、scheme・region・service hostを固定し、
         # 利用者が任意の送信先へRuntime認証情報を署名させる余地を作らない。
@@ -92,6 +100,30 @@ class AppConfig:
         ):
             # 個別値を例外へ含めず、内部endpointや設定値がHTTP応答へ漏れないようにする。
             raise ConfigurationError()
+
+        # EstimationはPoC追加前の環境でも既存Agentを起動できる任意機能とする。
+        # URLとTargetの片側欠落や形式不正は全体設定エラーにせず、状態を残して
+        # Estimationだけをfail-closedで無効化する。
+        estimation_configured = bool(
+            estimation_gateway_url and estimation_gateway_target_name
+        )
+        estimation_gateway = (
+            GatewayConfig(
+                url=estimation_gateway_url,
+                region=aws_region,
+                target_name=estimation_gateway_target_name,
+            )
+            if estimation_configured
+            and _is_valid_gateway_url(estimation_gateway_url)
+            and _is_valid_gateway_target_name(estimation_gateway_target_name)
+            else None
+        )
+        if not estimation_gateway_url and not estimation_gateway_target_name:
+            estimation_state = "UNSET"
+        elif estimation_gateway is None:
+            estimation_state = "INCOMPLETE"
+        else:
+            estimation_state = "ENABLED"
 
         return cls(
             aws_region=aws_region,
@@ -110,6 +142,8 @@ class AppConfig:
                 region=aws_region,
                 target_name=knowledge_gateway_target_name,
             ),
+            estimation_gateway=estimation_gateway,
+            estimation_gateway_state=estimation_state,
         )
 
 

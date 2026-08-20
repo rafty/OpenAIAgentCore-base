@@ -1048,6 +1048,9 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "bedrock-agentcore" },
+    { name = "boto3" },
+    { name = "botocore" },
+    { name = "jsonschema" },
     { name = "mcp" },
     { name = "mcp-proxy-for-aws" },
     { name = "openai", extra = ["bedrock"] },
@@ -1064,6 +1067,9 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "bedrock-agentcore", specifier = "==1.20.0" },
+    { name = "boto3", specifier = "==1.43.65" },
+    { name = "botocore", specifier = "==1.43.65" },
+    { name = "jsonschema", specifier = "==4.26.0" },
     { name = "mcp", specifier = "==1.29.0" },
     { name = "mcp-proxy-for-aws", specifier = "==1.6.4" },
     { name = "openai", extras = ["bedrock"], specifier = "==2.53.0" },

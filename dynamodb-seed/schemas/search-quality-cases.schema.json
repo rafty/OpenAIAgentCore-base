@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "array",
+  "minItems": 6,
+  "items": {
+    "type": "object",
+    "required": ["case_id", "query", "filters", "expected_top1_project_id"],
+    "additionalProperties": false,
+    "properties": {
+      "case_id": {"type": "string", "pattern": "^SEARCH-[0-9]{3}$"},
+      "query": {"type": "string", "minLength": 10, "maxLength": 2000},
+      "filters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "project_type": {"type": "string"},
+          "architecture_family": {"type": "string"},
+          "outcome_quality": {"type": "string"}
+        }
+      },
+      "expected_top1_project_id": {"type": "string", "pattern": "^HIST-[0-9]{3}$"}
+    }
+  }
+}

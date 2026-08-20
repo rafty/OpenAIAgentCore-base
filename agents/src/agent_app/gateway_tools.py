@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import hashlib
 import json
 import logging
 from collections.abc import Mapping
@@ -25,14 +27,24 @@ logger = logging.getLogger("bedrock_agentcore.app.agent_app.gateway_tools")
 
 MCP_SERVER_NAME = "AgentCoreWeatherGateway"
 KNOWLEDGE_MCP_SERVER_NAME = "AgentCoreKnowledgeGateway"
+ESTIMATION_MCP_SERVER_NAME = "AgentCoreEstimationGateway"
 MCP_AWS_SERVICE = "bedrock-agentcore"
 MCP_TRANSPORT_TIMEOUT_SECONDS = 30
 MCP_CLIENT_SESSION_TIMEOUT_SECONDS = 10
 MCP_CLEANUP_TIMEOUT_SECONDS = 5
+ESTIMATION_MCP_TRANSPORT_TIMEOUT_SECONDS = 75
+ESTIMATION_TOOL_TIMEOUT_SECONDS = 60
 _TOOL_NAME_DELIMITER = "___"
 _WEATHER_TOOL_NAMES = ("get_weather", "get_time")
+_ESTIMATION_TOOL_NAMES = (
+    "search_similar_projects",
+    "get_estimation_reference_data",
+    "create_estimate_draft",
+    "get_estimate_draft",
+)
 TOOL_UNAVAILABLE_MESSAGE = "現在、天気・時刻情報を取得できません。"
 KNOWLEDGE_TOOL_UNAVAILABLE_MESSAGE = "現在、社内ナレッジを取得できません。"
+ESTIMATION_TOOL_UNAVAILABLE_MESSAGE = "現在、見積情報を取得または保存できません。"
 _KNOWLEDGE_TOOL_NAME = "Retrieve"
 _KNOWLEDGE_DOCUMENT_PATHS = frozenset(
     {
@@ -62,6 +74,23 @@ _FILTER_COMPOSITES = frozenset({"andAll", "orAll"})
 _MAX_FILTER_COMPOSITE_DEPTH = 2
 _MAX_FILTER_CONDITIONS = 8
 _MISSING_CONTENT = object()
+_ESTIMATION_STATUSES = frozenset(
+    {
+        "OK",
+        "NO_RESULTS",
+        "VALIDATION_ERROR",
+        "CONTEXT_INVALID",
+        "CONTEXT_EXPIRED",
+        "NOT_FOUND",
+        "DEPENDENCY_UNAVAILABLE",
+        "SAVE_FAILED",
+        "INTERNAL_ERROR",
+    }
+)
+_ESTIMATION_FORBIDDEN_KEYS = frozenset(
+    {"PK", "SK", "embedding", "SearchVector", "vector"}
+)
+_ESTIMATION_RESULT_MAX_BYTES = 64 * 1024
 
 TransportFactory = Callable[..., AbstractAsyncContextManager[Any]]
 
@@ -83,6 +112,8 @@ class AgentCoreGatewayMCPServer(MCPServerStreamableHttp):
         region: str,
         target_name: str,
         tool_contract: str = "weather",
+        actor_id: str | None = None,
+        session_id: str | None = None,
         transport_factory: TransportFactory = aws_iam_streamablehttp_client,
     ) -> None:
         self._endpoint = endpoint
@@ -94,9 +125,17 @@ class AgentCoreGatewayMCPServer(MCPServerStreamableHttp):
         elif tool_contract == "knowledge":
             tool_names = (_KNOWLEDGE_TOOL_NAME,)
             server_name = KNOWLEDGE_MCP_SERVER_NAME
+        elif tool_contract == "estimation":
+            if not actor_id or not session_id:
+                raise ValueError("Estimationの実行コンテキストがありません。")
+            tool_names = _ESTIMATION_TOOL_NAMES
+            server_name = ESTIMATION_MCP_SERVER_NAME
         else:
             raise ValueError("未対応のGateway Tool契約です。")
         self.tool_contract = tool_contract
+        self._actor_id = actor_id
+        self._session_id = session_id
+        self._search_count = 0
         self.required_tool_names = tuple(
             f"{target_name}{_TOOL_NAME_DELIMITER}{tool_name}"
             for tool_name in tool_names
@@ -105,16 +144,26 @@ class AgentCoreGatewayMCPServer(MCPServerStreamableHttp):
         # proxyはDEBUG時にendpointを記録するため、root loggerを変更せずpackage単位で
         # INFO以上に固定し、内部URLが運用ログへ流れる経路を閉じる。
         logging.getLogger("mcp_proxy_for_aws").setLevel(logging.INFO)
+        transport_timeout = (
+            ESTIMATION_MCP_TRANSPORT_TIMEOUT_SECONDS
+            if tool_contract == "estimation"
+            else MCP_TRANSPORT_TIMEOUT_SECONDS
+        )
+        tool_timeout = (
+            ESTIMATION_TOOL_TIMEOUT_SECONDS
+            if tool_contract == "estimation"
+            else MCP_CLIENT_SESSION_TIMEOUT_SECONDS
+        )
         super().__init__(
             params={
                 "url": endpoint,
-                "timeout": MCP_TRANSPORT_TIMEOUT_SECONDS,
+                "timeout": transport_timeout,
                 "terminate_on_close": True,
             },
             # 接続はリクエスト単位で破棄するため、Tool一覧cacheも同じ境界内だけで使う。
             cache_tools_list=True,
             name=server_name,
-            client_session_timeout_seconds=MCP_CLIENT_SESSION_TIMEOUT_SECONDS,
+            client_session_timeout_seconds=tool_timeout,
             tool_filter={"allowed_tool_names": list(self.required_tool_names)},
             use_structured_content=False,
             # 同一turn内で自動再試行せず、次のRuntime呼び出しを再試行境界にする。
@@ -132,7 +181,11 @@ class AgentCoreGatewayMCPServer(MCPServerStreamableHttp):
             endpoint=self._endpoint,
             aws_service=MCP_AWS_SERVICE,
             aws_region=self._region,
-            timeout=MCP_TRANSPORT_TIMEOUT_SECONDS,
+            timeout=(
+                ESTIMATION_MCP_TRANSPORT_TIMEOUT_SECONDS
+                if self.tool_contract == "estimation"
+                else MCP_TRANSPORT_TIMEOUT_SECONDS
+            ),
             terminate_on_close=True,
         )
 
@@ -149,6 +202,11 @@ class AgentCoreGatewayMCPServer(MCPServerStreamableHttp):
             self.required_tool_names
         ):
             raise GatewayToolsUnavailableError()
+        if self.tool_contract == "estimation":
+            # actor/session/冪等性値はGateway Lambdaとの内部契約であり、モデルに
+            # 生成させる入力ではない。実行時にadapterが注入するため公開Schemaから
+            # 除外し、モデルが予約値の形式エラーを自己修正し続ける状態を防ぐ。
+            return [_public_estimation_tool(tool) for tool in tools]
         return tools
 
     async def call_tool(
@@ -176,10 +234,23 @@ class AgentCoreGatewayMCPServer(MCPServerStreamableHttp):
                     "kind=knowledge stage=arguments"
                 )
                 return self._unavailable_result()
+        elif self.tool_contract == "estimation":
+            gateway_arguments = self._estimation_arguments(tool_name, arguments)
+            if gateway_arguments is None:
+                logger.warning(
+                    "Gateway Toolを利用不能として継続します: "
+                    "kind=estimation stage=arguments"
+                )
+                return self._unavailable_result()
         try:
             # SDK内のClientSession timeoutだけへ依存せず、このadapter自身も有限時間で
             # base callを打ち切り、無応答のGatewayを固定の利用不能結果へ閉じ込める。
-            async with asyncio.timeout(MCP_CLIENT_SESSION_TIMEOUT_SECONDS):
+            timeout = (
+                ESTIMATION_TOOL_TIMEOUT_SECONDS
+                if self.tool_contract == "estimation"
+                else MCP_CLIENT_SESSION_TIMEOUT_SECONDS
+            )
+            async with asyncio.timeout(timeout):
                 result = await super().call_tool(
                     tool_name, gateway_arguments, meta=meta
                 )
@@ -204,6 +275,16 @@ class AgentCoreGatewayMCPServer(MCPServerStreamableHttp):
                 return self._unavailable_result()
             return _canonical_tool_result(payload)
 
+        if self.tool_contract == "estimation":
+            payload = _normalize_estimation_result(tool_name, result)
+            if payload is None:
+                logger.warning(
+                    "Gateway Toolを利用不能として継続します: "
+                    "kind=estimation stage=result"
+                )
+                return self._unavailable_result()
+            return _canonical_tool_result(payload)
+
         payload = _normalize_call_tool_result(result)
         short_tool_name = tool_name.rsplit(_TOOL_NAME_DELIMITER, maxsplit=1)[-1]
         if payload is None or not _is_valid_mock_result(short_tool_name, payload):
@@ -221,7 +302,58 @@ class AgentCoreGatewayMCPServer(MCPServerStreamableHttp):
             return _canonical_tool_result_unchecked(
                 {"error": KNOWLEDGE_TOOL_UNAVAILABLE_MESSAGE}
             )
+        if self.tool_contract == "estimation":
+            return _canonical_tool_result_unchecked(
+                {
+                    "status": "DEPENDENCY_UNAVAILABLE",
+                    "data": {"saved": False},
+                    "warnings": [ESTIMATION_TOOL_UNAVAILABLE_MESSAGE],
+                    "correlation_id": "runtime-adapter",
+                }
+            )
         return _unavailable_tool_result()
+
+    def _estimation_arguments(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """モデル入力から内部予約値を捨て、検証済み実行scopeで上書きする。"""
+
+        if not isinstance(arguments, Mapping):
+            return None
+        short_name = tool_name.rsplit(_TOOL_NAME_DELIMITER, maxsplit=1)[-1]
+        normalized = dict(arguments)
+        # actor/session/idempotencyは認可境界なのでモデルが同名値を生成しても採用しない。
+        normalized["_actor_id"] = self._actor_id
+        normalized["_session_id"] = self._session_id
+        normalized.pop("_idempotency_key", None)
+        normalized.pop("_request_hash", None)
+        if short_name == "search_similar_projects":
+            self._search_count += 1
+            if self._search_count > 3:
+                return None
+        if short_name == "create_estimate_draft" and normalized.get("operation") == "SAVE":
+            # 同じ実行scopeと同じ正規化入力から同じキーを生成し、transport再試行で
+            # Draftを重複作成しない。キー自体をモデルへ委ねない。
+            try:
+                canonical = json.dumps(
+                    normalized,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            except (TypeError, ValueError):
+                return None
+            request_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            idempotency_source = (
+                f"{self._actor_id}\0{self._session_id}\0{request_hash}"
+            )
+            normalized["_request_hash"] = request_hash
+            normalized["_idempotency_key"] = hashlib.sha256(
+                idempotency_source.encode("utf-8")
+            ).hexdigest()
+        return normalized
 
 
 def create_gateway_mcp_server(
@@ -253,6 +385,49 @@ def create_knowledge_gateway_mcp_server(
         tool_contract="knowledge",
         transport_factory=transport_factory,
     )
+
+
+def create_estimation_gateway_mcp_server(
+    config: AppConfig,
+    actor_id: str,
+    session_id: str,
+    *,
+    transport_factory: TransportFactory = aws_iam_streamablehttp_client,
+) -> AgentCoreGatewayMCPServer:
+    """検証済みscopeを注入したリクエスト専用Estimation MCP serverを生成する。"""
+
+    if config.estimation_gateway is None:
+        raise GatewayToolsUnavailableError()
+    return AgentCoreGatewayMCPServer(
+        endpoint=config.estimation_gateway.url,
+        region=config.estimation_gateway.region,
+        target_name=config.estimation_gateway.target_name,
+        tool_contract="estimation",
+        actor_id=actor_id,
+        session_id=session_id,
+        transport_factory=transport_factory,
+    )
+
+
+def _public_estimation_tool(tool: MCPTool) -> MCPTool:
+    """Gateway内部予約引数を除いたモデル向けTool Schemaを返す。"""
+
+    schema = copy.deepcopy(tool.inputSchema)
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        for name in (
+            "_actor_id",
+            "_session_id",
+            "_idempotency_key",
+            "_request_hash",
+        ):
+            properties.pop(name, None)
+    required = schema.get("required")
+    if isinstance(required, list):
+        schema["required"] = [
+            name for name in required if not str(name).startswith("_")
+        ]
+    return tool.model_copy(update={"inputSchema": schema})
 
 
 def _normalize_retrieve_arguments(
@@ -479,6 +654,91 @@ def _normalize_call_tool_result(result: CallToolResult) -> dict[str, Any] | None
         # 同じ結果を表す二つの表現が競合する場合は、片方を恣意的に採用しない。
         return None
     return structured if structured is not None else text_payload
+
+
+def _normalize_estimation_result(
+    tool_name: str,
+    result: CallToolResult,
+) -> dict[str, Any] | None:
+    """Lambda結果をサイズ・禁止属性・Tool別最小shapeで再検証する。"""
+
+    payload = _normalize_call_tool_result(result)
+    if payload is None or set(payload) != {
+        "status",
+        "data",
+        "warnings",
+        "correlation_id",
+    }:
+        return None
+    status = payload.get("status")
+    data = payload.get("data")
+    warnings = payload.get("warnings")
+    correlation_id = payload.get("correlation_id")
+    if (
+        status not in _ESTIMATION_STATUSES
+        or not isinstance(data, Mapping)
+        or not isinstance(warnings, list)
+        or len(warnings) > 20
+        or not all(isinstance(item, str) and len(item) <= 500 for item in warnings)
+        or not isinstance(correlation_id, str)
+        or not correlation_id
+        or len(correlation_id) > 128
+        or _contains_forbidden_estimation_key(data)
+    ):
+        return None
+    try:
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (TypeError, ValueError):
+        return None
+    if len(encoded) > _ESTIMATION_RESULT_MAX_BYTES:
+        return None
+
+    short_name = tool_name.rsplit(_TOOL_NAME_DELIMITER, maxsplit=1)[-1]
+    # エラーstatusではdataが空でも契約上有効。成功時だけ、別Toolの結果を
+    # 取り違えないために後続処理が依存する最小フィールドを確認する。
+    if status in {"OK", "NO_RESULTS"}:
+        required = {
+            "search_similar_projects": {
+                "search_context_id": str,
+                "similar_projects": list,
+                "no_similar_projects": bool,
+            },
+            "get_estimation_reference_data": {
+                "master_references": list,
+                "search_context_id": str,
+            },
+            "create_estimate_draft": {"saved": bool, "operation": str},
+            "get_estimate_draft": {
+                "project_id": str,
+                "estimate_id": str,
+                "version": int,
+            },
+        }.get(short_name)
+        if required is None or any(
+            not isinstance(data.get(key), expected_type)
+            for key, expected_type in required.items()
+        ):
+            return None
+    return dict(payload)
+
+
+def _contains_forbidden_estimation_key(value: Any) -> bool:
+    """物理キーやVectorを入れ子も含めてAgent可視結果から除外する。"""
+
+    if isinstance(value, Mapping):
+        return any(
+            str(key) in _ESTIMATION_FORBIDDEN_KEYS
+            or _contains_forbidden_estimation_key(child)
+            for key, child in value.items()
+        )
+    if isinstance(value, list):
+        return any(_contains_forbidden_estimation_key(child) for child in value)
+    return False
 
 
 def _mapping_from_content(content: list[Any]) -> dict[str, Any] | None | object:

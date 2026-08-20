@@ -1,0 +1,103 @@
+[
+  {
+    "name": "search_similar_projects",
+    "description": "今回案件の要約から類似する架空の過去案件を上位3件検索し、安全な検索コンテキストを発行します。生のVectorやtop_kは受け取りません。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {"type": "string", "description": "要件と構成を含む今回案件の検索文。"},
+        "filters": {
+          "type": "object",
+          "description": "許可された完全一致filter。",
+          "properties": {
+            "project_type": {"type": "string", "description": "NEW_BUILDまたはMIGRATION。"},
+            "architecture_family": {"type": "string", "description": "EC2_RDS_WEB、SERVERLESS_API、ECS_RDS_WEBのいずれか。"},
+            "outcome_quality": {"type": "string", "description": "ACCEPTED。"}
+          }
+        },
+        "_actor_id": {"type": "string", "description": "Runtimeが内部注入する予約値。モデルは指定しません。"},
+        "_session_id": {"type": "string", "description": "Runtimeが内部注入する予約値。モデルは指定しません。"}
+      },
+      "required": ["query", "_actor_id", "_session_id"]
+    }
+  },
+  {
+    "name": "get_estimation_reference_data",
+    "description": "検索結果の安全な参照と、承認済み標準工数・単価・価格ポリシーを構造化データとして取得します。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "search_context_id": {"type": "string"},
+        "result_refs": {"type": "array", "items": {"type": "string"}},
+        "project_type": {"type": "string", "description": "NEW_BUILDまたはMIGRATION。"},
+        "services": {"type": "array", "description": "EC2、RDS、CLOUDWATCHのうち案件に含まれるもの。", "items": {"type": "string"}},
+        "task_types": {"type": "array", "description": "通常は空配列。サービス別の承認済み標準工数をすべて取得します。", "items": {"type": "string"}},
+        "roles": {"type": "array", "description": "AWS_ARCHITECTとINFRA_ENGINEER。", "items": {"type": "string"}},
+        "estimate_as_of": {"type": "string", "description": "YYYY-MM-DD形式の見積基準日。"},
+        "_actor_id": {"type": "string", "description": "Runtimeが内部注入する予約値。"},
+        "_session_id": {"type": "string", "description": "Runtimeが内部注入する予約値。"}
+      },
+      "required": ["search_context_id", "result_refs", "project_type", "services", "task_types", "roles", "estimate_as_of", "_actor_id", "_session_id"]
+    }
+  },
+  {
+    "name": "create_estimate_draft",
+    "description": "承認済みマスターで見積を再計算し、PREVIEWまたは明示保存されたDRAFTを返します。Agentが渡す合計値は使用しません。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "operation": {"type": "string", "description": "PREVIEWまたはSAVE。"},
+        "project": {
+          "type": "object",
+          "properties": {
+            "project_name": {"type": "string"},
+            "project_type": {"type": "string", "description": "NEW_BUILDまたはMIGRATION。"},
+            "architecture_summary": {"type": "string"},
+            "environments": {"type": "array", "description": "PRODUCTION、DEVELOPMENT、ALLのうち該当する環境。", "items": {"type": "string"}},
+            "components": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "service": {"type": "string", "description": "ALB、EC2、RDS、CLOUDWATCHのいずれか。"},
+                  "environment": {"type": "string", "description": "PRODUCTION、DEVELOPMENT、ALLのいずれか。"},
+                  "quantity": {"type": "number"},
+                  "unit": {"type": "string", "description": "ALB=LOAD_BALANCER、EC2=INSTANCE、RDS=DATABASE、CLOUDWATCH=ALARM。"},
+                  "conditions": {"type": "array", "description": "該当する場合はMULTI_AZ、TWO_AVAILABILITY_ZONES、POSTGRESQL。", "items": {"type": "string"}}
+                },
+                "required": ["service", "environment", "quantity", "unit", "conditions"]
+              }
+            },
+            "work_scope": {"type": "array", "description": "BASIC_DESIGN、DETAIL_DESIGN、BUILD、UNIT_TESTのうち対象作業。", "items": {"type": "string"}},
+            "assumptions": {"type": "array", "items": {"type": "string"}},
+            "exclusions": {"type": "array", "items": {"type": "string"}},
+            "estimate_as_of": {"type": "string", "description": "YYYY-MM-DD形式の見積基準日。"}
+          },
+          "required": ["project_name", "project_type", "architecture_summary", "environments", "components", "work_scope", "assumptions", "exclusions", "estimate_as_of"]
+        },
+        "search_context_id": {"type": "string"},
+        "result_refs": {"type": "array", "items": {"type": "string"}},
+        "_actor_id": {"type": "string", "description": "Runtimeが内部注入する予約値。"},
+        "_session_id": {"type": "string", "description": "Runtimeが内部注入する予約値。"},
+        "_idempotency_key": {"type": "string", "description": "MCPアダプターがSAVE時だけ内部注入する予約値。"},
+        "_request_hash": {"type": "string", "description": "MCPアダプターがSAVE時だけ内部注入する予約値。"}
+      },
+      "required": ["operation", "project", "search_context_id", "result_refs", "_actor_id", "_session_id"]
+    }
+  },
+  {
+    "name": "get_estimate_draft",
+    "description": "既知のproject_id、estimate_id、versionの完全キーで保存済みDRAFTを再取得します。一覧や任意検索は行いません。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_id": {"type": "string"},
+        "estimate_id": {"type": "string"},
+        "version": {"type": "integer"},
+        "_actor_id": {"type": "string", "description": "Runtimeが内部注入する予約値。"},
+        "_session_id": {"type": "string", "description": "Runtimeが内部注入する予約値。"}
+      },
+      "required": ["project_id", "estimate_id", "version", "_actor_id", "_session_id"]
+    }
+  }
+]

@@ -2,7 +2,7 @@
 
 ## 目的
 
-このガイドは、`us-east-1`へデプロイ済みの`OpenAiAgentRuntime`をAWS CLIから呼び出し、Manager、Weather Agent、AWS Knowledge Agent、2つのGateway、Managed Knowledge Base、Memory、SSE応答が連携して動作していることを手動確認するための手順です。
+このガイドは、`us-east-1`へデプロイ済みの`OpenAiAgentRuntime`をAWS CLIから呼び出し、Manager、Weather、AWS Knowledge、Estimation Agent、3つのGateway、Managed Knowledge Base、DynamoDB Vector Search、Memory、SSE応答が連携して動作していることを手動確認するための手順です。
 
 - デプロイと初回同期: [CDKドキュメント](../CDK/README.md)
 - Agent、HTTP／SSE、Memoryの詳細契約: [Agentドキュメント](../Agent/README.md)
@@ -323,3 +323,336 @@ GatewayやTargetを停止・削除して障害を起こす試験は通常の手�
 | 未実施理由 | 実行しなかったケースと理由 |
 
 完全なAWS認証情報、入力に含まれる個人情報、不要な内部識別子は証跡へ保存しません。
+
+## 7. Estimation DynamoDB Vector Searchの手動確認
+
+この節はMT-001～MT-010へ追加するEstimation専用シナリオです。ローカルテスト、synth、コンテナbuildの成功だけではAWS書き込みを許可しません。PoC責任者から対象account、profile、月額予算額、通知先、deploy・Seed・Runtime保存・cleanupの明示承認がそろった場合だけ実行します。
+
+### 7.1 予算と実行前提
+
+実行前に次を記録します。値をリポジトリ、Issue、Pull Requestへ固定しません。
+
+| 項目 | 必須確認 |
+| --- | --- |
+| AWS主体 | `aws sts get-caller-identity`で許可済みaccount／roleである |
+| Region | `us-east-1` |
+| Bedrock | `cohere.embed-multilingual-v3`を呼び出せる |
+| DynamoDB | Vector Searchが利用可能で、テーブル／Index quotaに余裕がある |
+| Budget | PoC責任者が月額予算額と通知先を指定済み |
+| 通知 | AWS Budgetsの実績コスト50%／80%／100%を同じ通知先へ設定済み |
+| 承認 | CDK deploy、Seed、実Vector評価、Draft保存、cleanupの範囲が明示されている |
+
+AWS Billing and Cost ManagementのBudgetsで月次Cost Budgetを作成し、50%、80%、100%の`ACTUAL`通知を設定します。既存Budgetを使う場合は、対象accountで次のread-only確認を行い、金額とsubscriberが責任者指定と一致することを画面または安全な作業記録へ残します。
+
+```bash
+AWS_ACCOUNT_ID="$(aws sts get-caller-identity \
+  --profile "$DEPLOY_PROFILE" --query Account --output text)"
+BUDGET_NAME='<PoC責任者が指定したBudget名>'
+
+aws budgets describe-budget \
+  --account-id "$AWS_ACCOUNT_ID" \
+  --budget-name "$BUDGET_NAME" \
+  --profile "$DEPLOY_PROFILE"
+
+aws budgets describe-notifications-for-budget \
+  --account-id "$AWS_ACCOUNT_ID" \
+  --budget-name "$BUDGET_NAME" \
+  --profile "$DEPLOY_PROFILE"
+```
+
+予算額、通知先、3閾値の一つでも未確認ならdeployへ進みません。メールアドレスなどの通知先はリポジトリへ記録しません。
+
+### 7.2 Estimation構成のdeployと準備状態
+
+承認後、[CDKドキュメント](../CDK/README.md#estimation-dynamodb-vector-search構成)に従って`cdk diff`をレビューし、意図した新規リソースとIAMだけであることを確認してdeployします。
+
+```bash
+cdk diff OpenAiAgentCoreBaseStack --profile "$DEPLOY_PROFILE"
+cdk deploy OpenAiAgentCoreBaseStack \
+  --profile "$DEPLOY_PROFILE" \
+  --require-approval broadening
+```
+
+CloudFormation出力から対象を解決します。
+
+```bash
+ESTIMATION_TABLE_NAME="$(
+  aws cloudformation describe-stacks \
+    --stack-name "$STACK_NAME" --region "$DEPLOY_REGION" --profile "$DEPLOY_PROFILE" \
+    --query "Stacks[0].Outputs[?OutputKey=='EstimationTableName'].OutputValue | [0]" \
+    --output text
+)"
+ESTIMATION_INDEX_NAME="$(
+  aws cloudformation describe-stacks \
+    --stack-name "$STACK_NAME" --region "$DEPLOY_REGION" --profile "$DEPLOY_PROFILE" \
+    --query "Stacks[0].Outputs[?OutputKey=='EstimationVectorIndexName'].OutputValue | [0]" \
+    --output text
+)"
+
+test "$ESTIMATION_TABLE_NAME" = 'OpenAiEstimationData'
+test "$ESTIMATION_INDEX_NAME" = 'EstimationProjectVectorIndexV1'
+```
+
+テーブル、Index、Gateway、Target、Lambdaを確認します。
+
+```bash
+aws dynamodb describe-table \
+  --table-name "$ESTIMATION_TABLE_NAME" \
+  --region "$DEPLOY_REGION" --profile "$DEPLOY_PROFILE" \
+  --query "Table.{Status:TableStatus,VectorIndexes:VectorIndexes[?IndexName=='$ESTIMATION_INDEX_NAME'].{Name:IndexName,Status:IndexStatus,Dimensions:Dimensions,Distance:DistanceFunction}}" \
+  --output json
+
+aws bedrock-agentcore-control list-gateways \
+  --region "$DEPLOY_REGION" --profile "$DEPLOY_PROFILE" \
+  --query "items[?name=='OpenAiEstimationGateway'].{Id:gatewayId,Status:status}" \
+  --output table
+
+ESTIMATION_GATEWAY_ID="$(
+  aws bedrock-agentcore-control list-gateways \
+    --region "$DEPLOY_REGION" --profile "$DEPLOY_PROFILE" \
+    --query "items[?name=='OpenAiEstimationGateway'].gatewayId | [0]" --output text
+)"
+aws bedrock-agentcore-control list-gateway-targets \
+  --gateway-identifier "$ESTIMATION_GATEWAY_ID" \
+  --region "$DEPLOY_REGION" --profile "$DEPLOY_PROFILE" \
+  --query "items[?name=='EstimationTools'].{Name:name,Status:status}" --output table
+
+aws lambda get-function --function-name OpenAiEstimationTools \
+  --region "$DEPLOY_REGION" --profile "$DEPLOY_PROFILE" \
+  --query 'Configuration.{State:State,Architecture:Architectures,Timeout:Timeout}'
+```
+
+テーブル、Gateway、Target、Lambdaが利用可能で、Indexが`ACTIVE`、1024次元、`COSINE`でない場合は停止します。CLIでも対象Indexだけを待機できます。
+
+```bash
+uv run python scripts/estimation_seed.py \
+  --region "$DEPLOY_REGION" --stack-name "$STACK_NAME" wait-index
+```
+
+### 7.3 Sample Dataの検証、明示投入、冪等再実行
+
+最初にAWS書き込みなしで正本を検証します。
+
+```bash
+uv run python scripts/estimation_seed.py validate --source dynamodb-seed
+```
+
+`VALID`を確認後、承認された実行であることを再確認し、`--apply`付きで投入します。
+
+```bash
+uv run python scripts/estimation_seed.py \
+  --region "$DEPLOY_REGION" --stack-name "$STACK_NAME" \
+  apply --apply
+```
+
+初回は`embedded=3`、`structured_upserted=15`が目安です。同じコマンドをもう一度実行し、`embedded=0`、`summary_skipped=3`となることを確認します。hash一致時はBedrock呼び出しと案件サマリー書き込みをskipします。Vectorを`dynamodb-seed/`へ書き戻していないことも`git status --short`で確認します。
+
+### 7.4 実Vector検索のSample Data回帰評価
+
+一時ファイルへ評価証跡を出します。
+
+```bash
+ESTIMATION_EVAL_OUTPUT="$MANUAL_TEST_OUTPUT_DIR/estimation-vector-evaluation.json"
+uv run python scripts/estimation_vector_e2e.py evaluate \
+  --region "$DEPLOY_REGION" --stack-name "$STACK_NAME" \
+  --source dynamodb-seed --output "$ESTIMATION_EVAL_OUTPUT"
+```
+
+期待結果:
+
+- 正本6件と`SAMPLE-PROJECT-DELTA`の合計7件が評価される。
+- 各ケースの`passed=true`で、HIST-001／002／003を期待する各ケースがtop-1になる。
+- Sample Project Deltaは`HIST-001`がtop-1になる。
+- reportに実行日時、region、モデル、1024次元、正規化version、Seed hash、Index名、順位がある。
+- `evaluation_scope=POC_SAMPLE_DATA_REGRESSION_ONLY`である。この合格を本番データの検索品質保証とは表現しない。
+- COSINE scoreの絶対値や完全一致を合否条件にしない。
+
+### 7.5 検索・参照・preview・SAVEの主要シーケンス
+
+```mermaid
+sequenceDiagram
+    actor User as 利用者
+    participant Manager as Manager Agent
+    participant Estimation as Estimation Agent
+    participant Gateway as Estimation Gateway
+    participant Tool as Estimation Tools Lambda
+    participant Bedrock as Bedrock Cohere Embedding
+    participant DDB as DynamoDB / Vector Index
+
+    User->>Manager: RFP整理済み要件・構成・保存意図
+    Manager->>Estimation: Agent.as_tool()
+    Estimation->>Gateway: search_similar_projects
+    Gateway->>Tool: Lambda invoke
+    Tool->>Bedrock: search_query Embedding 1回
+    Bedrock-->>Tool: 1024次元Vector
+    Tool->>DDB: SearchVectors（固定scope・filter・top-3）
+    DDB-->>Tool: 候補projection
+    Tool->>DDB: 候補ごとの正式実績GetItem
+    Tool->>DDB: opaque search_context_id / result_ref保存
+    Tool-->>Estimation: 候補またはNO_RESULTS
+    Estimation->>Gateway: get_estimation_reference_data（opaque ref）
+    Gateway->>Tool: Lambda invoke
+    Tool->>DDB: 標準工数・単価・価格・正式実績を既知キー参照
+    Tool-->>Estimation: 根拠・ID・version
+    Estimation->>Gateway: create_estimate_draft PREVIEWまたはSAVE
+    Gateway->>Tool: Lambda invoke
+    Tool->>Tool: Decimalで再計算
+    alt PREVIEW_ONLYまたはAMBIGUOUS
+        Tool-->>Estimation: saved=false / 内訳・警告
+        Estimation-->>Manager: preview。AMBIGUOUSは保存確認
+    else EXPLICIT_SAVE
+        Tool->>DDB: Draft + 冪等性ItemをTransactWriteItems
+        Tool->>DDB: 保存後GetItem
+        Tool-->>Estimation: saved=true / project_id・estimate_id・version
+        Estimation-->>Manager: 保存済み根拠・内訳・ID
+    end
+    Manager-->>User: 日本語の最終回答
+```
+
+Runtime、Gateway、Toolの権限は分離されています。RuntimeはDynamoDBとCohereモデルを直接呼びません。Vector検索結果の物理キーを正本とせず、opaque refを同じactor/session、30分期限に束縛し、正式数値をベーステーブルから再取得します。
+
+### 7.6 Sample Project Deltaのpreview、明示保存、曖昧保存
+
+Sample Dataからプロンプトを読み込みます。プロンプトや認証値をshell history以外の共有成果物へ固定しません。
+
+```bash
+DELTA_SAVE_PROMPT="$(python3 -c \
+  'import json; print(json.load(open("dynamodb-seed/sample-inputs/sample-project-delta.json", encoding="utf-8"))["prompt"])')"
+```
+
+preview-onlyでは「保存しない」を明示します。
+
+```bash
+invoke_runtime 'MT-EST-001-PREVIEW' \
+  "est-preview-$(date +%s)-0000000000001" \
+  'manual-estimation-user-001' \
+  "${DELTA_SAVE_PROMPT/Draftとして保存してください/計算結果を表示してください。保存しないでください}"
+```
+
+期待結果は`15.7人日`、役割別`AWS_ARCHITECT 5.0`／`INFRA_ENGINEER 10.7`人日、原価`1,356,000円`、提示価格`1,695,000円`、`HIST-001`、参照マスターversion 1、類似実績26.0人日を自動補正しない旨、Multi-AZ追加工数が未反映の警告です。保存IDや「保存済み」を返さず、DynamoDBへDraftを追加しません。
+
+明示保存は新しいsessionで実行します。
+
+```bash
+DELTA_SAVE_SESSION="est-save-$(date +%s)-0000000000000001"
+DELTA_SAVE_ACTOR='manual-estimation-save-user-001'
+invoke_runtime 'MT-EST-002-SAVE' \
+  "$DELTA_SAVE_SESSION" "$DELTA_SAVE_ACTOR" "$DELTA_SAVE_PROMPT"
+```
+
+追加確認を挟まず同一turnで保存し、`saved=true`を確認できた後だけ、状態`DRAFT`、`project_id`、`estimate_id`、`version=1`を返すことが期待結果です。回答から3値を作業用変数へ転記します。
+
+```bash
+DELTA_PROJECT_ID='<回答で確認したproject_id>'
+DELTA_ESTIMATE_ID='<回答で確認したestimate_id>'
+DELTA_VERSION='1'
+```
+
+同じactor/sessionで完全IDを指定して再取得します。
+
+```bash
+invoke_runtime 'MT-EST-003-GET' \
+  "$DELTA_SAVE_SESSION" "$DELTA_SAVE_ACTOR" \
+  "project_id=${DELTA_PROJECT_ID}、estimate_id=${DELTA_ESTIMATE_ID}、version=${DELTA_VERSION}の見積Draftを再取得してください。"
+```
+
+保存時と同じ根拠、版、15.7人日、原価、価格、警告が返ることを確認します。
+
+曖昧な依頼は別sessionで実行します。
+
+```bash
+invoke_runtime 'MT-EST-004-AMBIGUOUS' \
+  "est-ambiguous-$(date +%s)-0000000000001" \
+  'manual-estimation-ambiguous-user-001' \
+  "${DELTA_SAVE_PROMPT/Draftとして保存してください/見積を作ってください}"
+```
+
+previewの対象、主要金額、根拠と「保存するとDraftが永続化される」ことを示して確認を求め、確認前に保存IDや保存済み表現を返さないことを確認します。
+
+### 7.7 類似案件0件の継続
+
+Sample Data内で組み合わせが存在しない`MIGRATION`かつ`EC2_RDS_WEB`になる案件を、明示保存で依頼します。
+
+```bash
+invoke_runtime 'MT-EST-005-NO-RESULTS' \
+  "est-no-results-$(date +%s)-00000000001" \
+  'manual-estimation-no-results-user-001' \
+  '既存のEC2 2台とRDS 1DBの業務Webを同構成のままAWSへ移行します。基本設計、詳細設計、構築、単体テストの見積をDraftとして保存してください。見積基準日は2026-08-19です。'
+```
+
+検索0件をエラー扱いせず、標準工数・単価・価格だけで同一turn保存を継続します。回答とDraftに「類似案件なし」、`similar_project_ids=[]`、`similar_project_search_status=NO_RESULTS`、`calculation_basis=STANDARD_MASTERS_ONLY`があることを確認します。
+
+### 7.8 opaque refの安全性
+
+正常検索で発行された`search_context_id`と`result_ref`は、Agentが案件IDへ置き換えず後続Toolへ渡します。GatewayのSigV4対応MCP検証クライアントを使える承認済み環境では、次を別々に確認します。値そのものは共有証跡へ保存せず、statusだけを記録します。
+
+1. 正常検索と同じactor/session、未改変refで`get_estimation_reference_data`を呼ぶと`OK`。
+2. `result_ref`を1文字変更すると`CONTEXT_INVALID`。
+3. 同じcontext/refを別actorまたは別Runtime sessionから使うと`CONTEXT_INVALID`。
+4. 発行から30分後、またはテスト用fake clockによる期限超過では、DynamoDB TTL削除前でも`CONTEXT_EXPIRED`。
+5. 任意の`project_id`、`PK`、`SK`、`top_k`、filter式をTool入力へ追加しても正式参照へ使われない。
+
+実AWSで30分待機しない場合、期限切れは自動テスト`tests/unit/test_estimation_repository_context.py`の結果を証跡とし、AWS E2Eでは未実施理由を記録します。期限検証のためにDynamoDB Itemを直接改変しません。
+
+### 7.9 DynamoDB Item、ログ、EMF
+
+明示保存で記録した完全キーだけを取得します。Scanやテーブル全量exportは行いません。
+
+```bash
+aws dynamodb get-item \
+  --table-name "$ESTIMATION_TABLE_NAME" \
+  --key "{\"PK\":{\"S\":\"ESTIMATE_PROJECT#${DELTA_PROJECT_ID}\"},\"SK\":{\"S\":\"ESTIMATE#${DELTA_ESTIMATE_ID}#V0001\"}}" \
+  --consistent-read \
+  --region "$DEPLOY_REGION" --profile "$DEPLOY_PROFILE" \
+  --output json > "$MANUAL_TEST_OUTPUT_DIR/delta-draft.json"
+```
+
+`DRAFT`、計算内訳、根拠、マスターversion、`HIST-001`、警告、作成者が保存されていることを確認します。生成Vectorは過去案件の`SUMMARY` Itemだけにあり、Draft、実績、マスター、正本JSONにはありません。
+
+```bash
+aws logs tail '/aws/lambda/OpenAiEstimationTools' \
+  --since 30m --region "$DEPLOY_REGION" --profile "$DEPLOY_PROFILE" \
+  > "$MANUAL_TEST_OUTPUT_DIR/estimation-tools.log"
+
+rg -n 'EmbeddingCalls|EmbeddingRetries|EmbeddingThrottles|EmbeddingLatency' \
+  "$MANUAL_TEST_OUTPUT_DIR/estimation-tools.log"
+
+rg -n 'search_summary|embedding|SearchVector|daily_rate_jpy|proposed_price_jpy|PRIVATE|AKIA|ASIA' \
+  "$MANUAL_TEST_OUTPUT_DIR/estimation-tools.log"
+```
+
+最初の検索でEmbedding call、初回Seedで3件のdocument Embeddingが観測できること、再Seedのhash一致skipでは追加呼び出しがないことをメトリクスで確認します。最後の禁止情報検索は該当なしが期待です。EMFに本文、Vector、単価、価格を含めません。
+
+### 7.10 完全キーcleanup
+
+Itemと再取得を確認し、削除対象の完全な3 IDを記録した後だけcleanupします。`--apply`なしでは削除されません。
+
+```bash
+uv run python scripts/estimation_seed.py \
+  --region "$DEPLOY_REGION" --stack-name "$STACK_NAME" \
+  cleanup-draft --apply \
+  --project-id "$DELTA_PROJECT_ID" \
+  --estimate-id "$DELTA_ESTIMATE_ID" \
+  --version "$DELTA_VERSION"
+```
+
+当該Draftと関連する冪等性Itemだけが削除され、過去案件、実績、マスター、他Draftが残ることを確認します。CLIはScan、一括削除、管理外Item削除を行いません。追加で作成した0件ケースのDraftも、そのケースで記録した完全IDを使って個別にcleanupします。
+
+### 7.11 Estimation結果記録
+
+| 項目 | 記録内容 |
+| --- | --- |
+| 承認 | deploy／Seed／保存／cleanupの承認範囲と日時 |
+| Budget | Budget名、月額上限確認、50%／80%／100%通知確認。通知先実値は記録しない |
+| Index | 名、`ACTIVE`、1024、COSINE |
+| Seed | 初回件数、再実行skip件数、正本差分なし |
+| Vector評価 | 7件の順位・合否、Delta=`HIST-001` top-1、Sample Data限定である旨 |
+| Delta preview | 15.7、5.0／10.7、1,356,000、1,695,000、非保存 |
+| Delta SAVE | 同一turn、保存後再取得、完全ID、version 1 |
+| 曖昧保存 | preview後の確認、確認前は非保存 |
+| 0件 | 標準マスター継続、`STANDARD_MASTERS_ONLY`、類似案件なし |
+| opaque ref | 正常、改変、別actor/session、期限切れのstatus。未実施は理由 |
+| ログ／EMF | 呼出回数、再試行、throttle、latency、禁止情報なし |
+| cleanup | 削除した完全ID、関連2 Itemだけの削除確認 |
+
+AWS認証情報、account ID、ARN、Gateway URL、opaque token、生成Vector、入力全文、メールアドレスをリポジトリへ保存しません。実施していない項目は成功とせず、理由と再実行条件を記録します。

@@ -1,0 +1,4 @@
+[
+  {"master_id":"RATE-AWS-ARCHITECT","role":"AWS_ARCHITECT","daily_rate_jpy":100000,"valid_from":"2026-01-01","valid_to":"2026-12-31","approval_status":"APPROVED","version":1,"schema_version":1},
+  {"master_id":"RATE-INFRA-ENGINEER","role":"INFRA_ENGINEER","daily_rate_jpy":80000,"valid_from":"2026-01-01","valid_to":"2026-12-31","approval_status":"APPROVED","version":1,"schema_version":1}
+]

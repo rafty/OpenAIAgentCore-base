@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["prompt", "normalized_input"],
+  "additionalProperties": false,
+  "properties": {
+    "prompt": {"type": "string", "minLength": 20, "maxLength": 10000},
+    "normalized_input": {
+      "type": "object",
+      "required": ["project_name", "project_type", "architecture_summary", "environments", "components", "work_scope", "assumptions", "exclusions", "estimate_as_of", "save_intent"],
+      "additionalProperties": false,
+      "properties": {
+        "project_name": {"const": "Sample Project Delta"},
+        "project_type": {"const": "NEW_BUILD"},
+        "architecture_summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "environments": {"type": "array", "minItems": 2, "items": {"type": "string"}},
+        "components": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"type": "object"}},
+        "work_scope": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "string"}},
+        "assumptions": {"type": "array", "maxItems": 20, "items": {"type": "string", "maxLength": 500}},
+        "exclusions": {"type": "array", "maxItems": 20, "items": {"type": "string", "maxLength": 500}},
+        "estimate_as_of": {"const": "2026-08-19"},
+        "save_intent": {"const": "EXPLICIT_SAVE"}
+      }
+    }
+  }
+}

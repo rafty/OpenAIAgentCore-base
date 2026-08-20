@@ -33,6 +33,21 @@ from agent_core_cdk_stack.constructs.weather_time_gateway_target_construct impor
 from agent_core_cdk_stack.constructs.weather_time_mock_lambda_construct import (
     WeatherTimeMockLambdaConstruct,
 )
+from agent_core_cdk_stack.constructs.agent_core_estimation_gateway_construct import (
+    AgentCoreEstimationGatewayConstruct,
+)
+from agent_core_cdk_stack.constructs.dynamodb_vector_index_construct import (
+    DynamoDbVectorIndexConstruct,
+)
+from agent_core_cdk_stack.constructs.estimation_data_construct import (
+    EstimationDataConstruct,
+)
+from agent_core_cdk_stack.constructs.estimation_gateway_target_construct import (
+    EstimationGatewayTargetConstruct,
+)
+from agent_core_cdk_stack.constructs.estimation_tools_lambda_construct import (
+    EstimationToolsLambdaConstruct,
+)
 
 
 class AgentCoreStack(Stack):
@@ -79,6 +94,30 @@ class AgentCoreStack(Stack):
             knowledge_base=managed_knowledge_base.knowledge_base,
             backend_policy=knowledge_gateway.backend_policy,
         )
+        estimation_data = EstimationDataConstruct(self, "EstimationData")
+        vector_index = DynamoDbVectorIndexConstruct(
+            self,
+            "EstimationVectorIndex",
+            table=estimation_data.table,
+        )
+        estimation_lambda = EstimationToolsLambdaConstruct(
+            self,
+            "EstimationToolsLambda",
+            table=estimation_data.table,
+            index_name=vector_index.index_name,
+        )
+        estimation_gateway = AgentCoreEstimationGatewayConstruct(
+            self, "EstimationGateway"
+        )
+        estimation_target = EstimationGatewayTargetConstruct(
+            self,
+            "EstimationGatewayTarget",
+            gateway=estimation_gateway.gateway,
+            lambda_function=estimation_lambda.function,
+        )
+        # Toolが検索可能になる前にGateway TargetだけがREADYにならないよう、
+        # Targetの作成順をVector Index Custom Resourceへ固定する。
+        estimation_target.target.node.add_dependency(vector_index.resource)
         runtime = AgentCoreRuntimeConstruct(
             self,
             "AgentCoreRuntime",
@@ -88,10 +127,16 @@ class AgentCoreStack(Stack):
             weather_gateway_target_name=weather_target.target_name,
             knowledge_gateway=knowledge_gateway.gateway,
             knowledge_gateway_target_name=knowledge_target.target_name,
+            estimation_gateway=estimation_gateway.gateway,
+            estimation_gateway_target_name=estimation_target.target_name,
         )
         # URL参照だけではTarget READYの作成順を表せないため、Runtimeを両Targetへ
         # 依存させる。Knowledge Data Sourceの同期は意図的にdeployから分離する。
-        runtime.runtime.node.add_dependency(weather_target.target, knowledge_target.target)
+        runtime.runtime.node.add_dependency(
+            weather_target.target,
+            knowledge_target.target,
+            estimation_target.target,
+        )
 
         CfnOutput(
             self,
@@ -104,4 +149,10 @@ class AgentCoreStack(Stack):
             "KnowledgeDataSourceId",
             value=knowledge_data_source.data_source_id,
             description="Initial ingestion用Data Source ID",
+        )
+        CfnOutput(
+            self,
+            "EstimationVectorIndexName",
+            value=vector_index.index_name,
+            description="Estimation Seed／E2E用Vector Index名",
         )

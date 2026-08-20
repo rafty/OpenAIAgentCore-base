@@ -21,12 +21,15 @@ class AgentCoreRuntimeConstruct(Construct):
         weather_gateway_target_name: str,
         knowledge_gateway: agentcore.IGateway,
         knowledge_gateway_target_name: str,
+        estimation_gateway: agentcore.IGateway,
+        estimation_gateway_target_name: str,
     ) -> None:
         super().__init__(scope, construct_id)
 
         weather_gateway_url = weather_gateway.gateway_url
         knowledge_gateway_url = knowledge_gateway.gateway_url
-        if not weather_gateway_url or not knowledge_gateway_url:
+        estimation_gateway_url = estimation_gateway.gateway_url
+        if not weather_gateway_url or not knowledge_gateway_url or not estimation_gateway_url:
             raise ValueError("AgentCore Gateway URLを解決できません。")
 
         # AgentCore Runtimeの実行基盤に合わせ、同じagents/をLinux ARM64としてbuildする。
@@ -62,6 +65,10 @@ class AgentCoreRuntimeConstruct(Construct):
                 "AGENTCORE_KNOWLEDGE_GATEWAY_TARGET_NAME": (
                     knowledge_gateway_target_name
                 ),
+                "AGENTCORE_ESTIMATION_GATEWAY_URL": estimation_gateway_url,
+                "AGENTCORE_ESTIMATION_GATEWAY_TARGET_NAME": (
+                    estimation_gateway_target_name
+                ),
             },
         )
 
@@ -77,3 +84,6 @@ class AgentCoreRuntimeConstruct(Construct):
         # 直接アクセスしない。権限と片系障害をGateway単位で分離する。
         weather_gateway.grant_invoke(self.runtime.role)
         knowledge_gateway.grant_invoke(self.runtime.role)
+        # RuntimeはEstimation Gatewayのinvokeだけを許可され、DynamoDBと
+        # Cohere Embeddingモデルは専用Tool Lambdaからのみ利用する。
+        estimation_gateway.grant_invoke(self.runtime.role)

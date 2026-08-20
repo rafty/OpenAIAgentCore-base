@@ -122,7 +122,7 @@ Custom Resourceは、CloudFormationのCreate、Update、DeleteイベントをPro
 
 Providerは次を行う。
 
-1. Create/Updateで `UpdateTable` のVector Index更新APIを呼ぶ。
+1. Create/Updateで `UpdateTable` のVector Index更新APIを呼ぶ。テーブル作成時の`AttributeDefinitions`はPK／SKだけとし、Search Schemaの文字列属性定義は`VectorIndexUpdates.Create`と同じ`UpdateTable`リクエストへ渡す。
 2. `DescribeTable` でテーブルとIndexが利用可能になるまで非同期に確認する。
 3. 同一設定の再実行を成功として扱う。
 4. 設定変更時は新しいバージョン付きIndex名を作成し、CloudFormationの置換ライフサイクルで旧Indexを削除する。

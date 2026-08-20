@@ -1,0 +1,22 @@
+{
+  "prompt": "Sample Project DeltaのAWS構築見積をDraftとして保存してください。社内業務Webシステムで、本番環境と開発環境があります。本番は2 Availability Zoneです。ALBは本番1台、EC2は本番4台と開発1台、RDS for PostgreSQLは本番1DBと開発1DBで本番はMulti-AZ、CloudWatchアラームは12個です。基本設計、詳細設計、構築、単体テストを対象とします。AWSアカウントとネットワーク接続は顧客提供で、作業は平日日中です。アプリケーション開発とデータ移行は対象外です。見積基準日は2026-08-19です。",
+  "normalized_input": {
+    "project_name": "Sample Project Delta",
+    "project_type": "NEW_BUILD",
+    "architecture_summary": "ALB、EC2、RDS for PostgreSQL、CloudWatchを使用する社内業務Webシステム。",
+    "environments": ["PRODUCTION", "DEVELOPMENT"],
+    "components": [
+      {"service":"ALB","environment":"PRODUCTION","quantity":"1","unit":"LOAD_BALANCER","conditions":["MULTI_AZ"]},
+      {"service":"EC2","environment":"PRODUCTION","quantity":"4","unit":"INSTANCE","conditions":["TWO_AVAILABILITY_ZONES"]},
+      {"service":"EC2","environment":"DEVELOPMENT","quantity":"1","unit":"INSTANCE","conditions":[]},
+      {"service":"RDS","environment":"PRODUCTION","quantity":"1","unit":"DATABASE","conditions":["POSTGRESQL","MULTI_AZ"]},
+      {"service":"RDS","environment":"DEVELOPMENT","quantity":"1","unit":"DATABASE","conditions":["POSTGRESQL"]},
+      {"service":"CLOUDWATCH","environment":"ALL","quantity":"12","unit":"ALARM","conditions":[]}
+    ],
+    "work_scope": ["BASIC_DESIGN", "DETAIL_DESIGN", "BUILD", "UNIT_TEST"],
+    "assumptions": ["AWSアカウントは顧客が提供する。", "ネットワーク接続は顧客が提供する。", "作業は平日日中に実施する。"],
+    "exclusions": ["アプリケーション開発", "データ移行"],
+    "estimate_as_of": "2026-08-19",
+    "save_intent": "EXPLICIT_SAVE"
+  }
+}

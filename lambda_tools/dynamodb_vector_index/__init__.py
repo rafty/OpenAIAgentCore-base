@@ -1,0 +1,1 @@
+"""DynamoDB Vector IndexのCloudFormation Provider。"""

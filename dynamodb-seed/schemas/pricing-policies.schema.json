@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "array",
+  "minItems": 1,
+  "items": {
+    "type": "object",
+    "required": ["policy_id", "risk_rate", "target_gross_margin_rate", "rounding_unit_jpy", "rounding_mode", "valid_from", "valid_to", "approval_status", "version", "schema_version"],
+    "additionalProperties": false,
+    "properties": {
+      "policy_id": {"type": "string", "pattern": "^PRICING-[A-Z0-9-]+$"},
+      "risk_rate": {"type": "string", "pattern": "^0(\\.[0-9]+)?$"},
+      "target_gross_margin_rate": {"type": "string", "pattern": "^0(\\.[0-9]+)?$"},
+      "rounding_unit_jpy": {"type": "integer", "minimum": 1},
+      "rounding_mode": {"const": "HALF_UP"},
+      "valid_from": {"type": "string", "format": "date"},
+      "valid_to": {"type": "string", "format": "date"},
+      "approval_status": {"const": "APPROVED"},
+      "version": {"type": "integer", "minimum": 1},
+      "schema_version": {"const": 1}
+    }
+  }
+}

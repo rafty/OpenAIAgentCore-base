@@ -10,6 +10,9 @@ dependencies = [
 [dependency-groups]
 dev = [
     "bedrock-agentcore==1.20.0",
+    "boto3==1.43.65",
+    "botocore==1.43.65",
+    "jsonschema==4.26.0",
     "mcp==1.29.0",
     "mcp-proxy-for-aws==1.6.4",
     "openai-agents==0.19.4",
@@ -18,4 +21,4 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["agents/src"]
+pythonpath = [".", "agents/src"]

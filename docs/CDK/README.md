@@ -618,3 +618,96 @@ cdk synth OpenAiAgentCoreBaseStack
 ```
 
 AWS差分の確認とdeployは、前節の対象アカウント確認と明示承認の手順に従ってください。
+
+## Estimation DynamoDB Vector Search構成
+
+Estimation PoCは、既存Weather／Knowledge経路から独立した次のリソースを同じ`us-east-1` stackへ追加します。
+
+```mermaid
+flowchart LR
+    Runtime["AgentCore Runtime"] -->|"InvokeGatewayのみ"| Gateway["OpenAiEstimationGateway"]
+    Gateway -->|"InvokeFunctionのみ"| Target["Target: EstimationTools"]
+    Target --> Lambda["OpenAiEstimationTools / 60秒"]
+    Lambda -->|"Get・Query・限定Write"| Table["OpenAiEstimationData"]
+    Lambda -->|"SearchVectors / 固定Index"| Index["EstimationProjectVectorIndexV1"]
+    Lambda -->|"InvokeModel / 固定モデル"| Embedding["Bedrock Cohere Embed Multilingual v3"]
+    Seed["明示Seed CLI"] -->|"実行時だけVector生成・upsert"| Table
+```
+
+`OpenAiEstimationData`は文字列`PK`／`SK`、オンデマンド課金、TTL属性`expires_at_epoch`、AWS所有キー暗号化、PITR初期無効、PoC用`DESTROY`の単一テーブルです。過去案件、正式実績、標準工数、単価、価格、検索コンテキスト、Draft、冪等性Itemは、PK／SK接頭辞と`entity_type`で論理分離します。本番移行時はPITR、保持方針、削除保護を再検討してください。
+
+### Vector IndexをCustom Resourceで管理する理由
+
+この実装時点のCloudFormationリソース仕様と`aws-cdk-lib`のDynamoDB L1／L2では、DynamoDB Vector Indexを宣言するプロパティがありません。一方、固定したboto3／botocore `1.43.65`のDynamoDB APIでは、`UpdateTable.VectorIndexUpdates`と`SearchVectors`を利用できます。この差を埋めるため、テーブル本体は通常の`AWS::DynamoDB::Table`、Vector Indexだけは`Custom::DynamoDbVectorIndex`と限定Providerで管理します。
+
+```mermaid
+sequenceDiagram
+    participant CFN as CloudFormation
+    participant Provider as Vector Index Provider
+    participant DDB as DynamoDB API
+
+    CFN->>Provider: Create / Update properties
+    Provider->>DDB: DescribeTable
+    alt 対象Indexがない
+        Provider->>DDB: UpdateTable AttributeDefinitions + VectorIndexUpdates.Create
+    else 同一設定で存在
+        Provider-->>CFN: 冪等成功
+    else 同名で設定不一致
+        Provider-->>CFN: version付きIndex名への置換を要求
+    end
+    loop 非同期作成中
+        CFN->>Provider: isComplete
+        Provider->>DDB: DescribeTable
+    end
+    Provider-->>CFN: ACTIVE
+    CFN->>Provider: Delete
+    Provider->>DDB: 対象Index名だけDelete
+    Provider-->>CFN: 削除済みなら成功
+```
+
+Index契約は次に固定します。
+
+- Index名: `EstimationProjectVectorIndexV1`
+- Vector属性: `embedding`
+- 次元: 1024
+- 距離関数: `COSINE`
+- HASH: `search_scope`
+- INLINE_FILTER: `entity_type`、`project_type`、`architecture_family`、`outcome_quality`
+- projection: 案件ID、案件名、検索要約と上記filterだけ
+
+テーブル作成時の`AttributeDefinitions`にはPK／SKだけを含めます。DynamoDBの`CreateTable`はKeySchemaで使わない属性定義を拒否する一方、Vector Indexの`SearchSchema`属性はIndex作成時に定義が必要です。そのためProviderは、`search_scope`、`entity_type`、`project_type`、`architecture_family`、`outcome_quality`の文字列属性定義を、`VectorIndexUpdates.Create`と同じ`UpdateTable`リクエストへ渡します。テーブル側へ非キー属性定義を先行追加しません。
+
+Providerは対象テーブルの`DescribeTable`と`UpdateTable`だけを許可され、他テーブルやItemを操作しません。Create／Update開始用と完了確認用Lambdaのログは1週間保持します。設定変更は同名Indexの暗黙上書きではなく、version付きIndex名を変更してCloudFormation置換として扱います。詳細は[ADR-0008](../ADR/adr-0008-manage-dynamodb-vector-index-with-custom-resource-provider.md)を参照してください。
+
+### Gateway、Lambda、IAM境界
+
+- Runtimeロール: Estimation Gatewayの`bedrock-agentcore:InvokeGateway`だけ。DynamoDB、Cohereモデル、Tool Lambdaへ直接アクセスしない。
+- Estimation Gatewayロール: `OpenAiEstimationTools`のinvokeだけ。
+- Tool Lambdaロール: 対象テーブルの`GetItem`／`Query`、対象Indexの`SearchVectors`、固定Cohereモデルの`InvokeModel`、ログ出力。書き込みは`SEARCH_CONTEXT#*`、`ESTIMATE_PROJECT#*`、`IDEMPOTENCY#*`の`dynamodb:LeadingKeys`だけ。
+- Seed実行者: Sample Data投入時に必要な読み書き、Index確認、固定モデル呼び出しを、Runtimeとは別の運用主体へ付与する。
+- cleanup実行者: 手動確認で記録した完全なDraftキーと関連冪等性Itemだけを削除する。
+
+Gateway Targetは`search_similar_projects`、`get_estimation_reference_data`、`create_estimate_draft`、`get_estimate_draft`の4 Schemaだけをインライン公開します。Tool Lambda、Providerの各ロググループは1週間保持し、入力本文、Vector、単価、価格をログdimensionへ出しません。単一Targetへ4 Toolを集約しつつ、Runtime、Gateway、Tool、Provider、Seedのロールを分ける判断は[ADR-0010](../ADR/adr-0010-use-single-estimation-gateway-target-with-separated-iam.md)を参照してください。
+
+CloudFormation出力は次のとおりです。
+
+| OutputKey | 用途 |
+| --- | --- |
+| `EstimationTableName` | Seed、評価、完全キーcleanupの対象テーブル解決 |
+| `EstimationVectorIndexName` | Index待機、Seed、実Vector評価の対象Index解決 |
+
+Sample DataはCDK assetやCustom Resourceで自動投入しません。deployのrollbackと業務データ変更を分離し、Bedrock呼び出し料金と更新対象を実行者が確認できるよう、[明示Seed CLI](../../dynamodb-seed/README.md)だけで投入します。`cdk deploy`完了はSeed完了を意味しません。
+
+ローカルでは、次のテストと3つのARM64 buildで構成を確認します。
+
+```bash
+uv run pytest tests/unit/test_estimation_stack.py
+uv run python app.py
+docker build --platform linux/arm64 -t openai-agentcore-poc:estimation-runtime agents
+docker build --platform linux/arm64 -t openai-agentcore-poc:estimation-tools \
+  -f lambda_tools/estimation/Dockerfile .
+docker build --platform linux/arm64 -t openai-agentcore-poc:vector-provider \
+  -f lambda_tools/dynamodb_vector_index/Dockerfile .
+```
+
+AWSへ書き込むdeploy、Seed、実Vector評価、Draft保存／cleanupは、対象account、profile、予算通知、明示承認を確認してから[手動テストガイド](../ManualTesting/README.md)に従います。
