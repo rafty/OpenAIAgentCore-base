@@ -141,7 +141,7 @@ printf 'Runtime: %s\nOutput: %s\n' "$AGENT_RUNTIME_ARN" "$MANUAL_TEST_OUTPUT_DIR
 
 ## 2. Runtime呼び出し用の共通関数
 
-bashまたはzshで定義します。JSONはPythonで生成するため、日本語や引用符を安全に扱えます。
+bashまたはzshで定義します。JSONはPythonで生成するため、日本語や引用符を安全に扱えます。応答の生SSEはファイルに保存し、標準出力には`text_delta`を連結した本文と終端イベントを表示します。
 
 ```bash
 invoke_runtime() {
@@ -172,11 +172,33 @@ invoke_runtime() {
     "$output_file"
 
   printf '\n===== %s =====\n' "$test_id"
-  cat "$output_file"
+
+  python3 - "$output_file" <<'PY'
+import json
+import sys
+
+output_file = sys.argv[1]
+
+with open(output_file, encoding="utf-8") as stream:
+    for line in stream:
+        if not line.startswith("data: "):
+            continue
+
+        event = json.loads(line.removeprefix("data: "))
+        event_type = event.get("type")
+
+        if event_type == "text_delta":
+            print(event.get("delta", ""), end="", flush=True)
+        elif event_type == "completed":
+            print("\n\n[SSE: completed]")
+        elif event_type == "error":
+            detail = json.dumps(event, ensure_ascii=False)
+            print(f"\n\n[SSE ERROR] {detail}")
+PY
 }
 ```
 
-正常時は`text_delta`が1件以上あり、最後が1件の`completed`です。`error`と`completed`の併存は失敗です。
+画面では分割された`text_delta`が通常の文章として連結表示されます。調査用の生SSEは`$MANUAL_TEST_OUTPUT_DIR/<test_id>.txt`に残ります。正常時は`text_delta`が1件以上あり、最後が1件の`completed`です。`error`と`completed`の併存は失敗です。
 
 ## 3. 手動テストケース
 
